@@ -272,7 +272,7 @@ jobs:
             -H "Accept: application/vnd.github+json" \
             -H "Authorization: Bearer $GH_TOKEN" \
             -H "X-GitHub-Api-Version: 2022-11-28" \
-            "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/workflows/sync.yaml/runs?created=${TODAY}T00:00:00Z..${TODAY}T23:59:59Z&per_page=100")
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/workflows/sync.yaml/runs?created=${TODAY}..${TODAY}&per_page=100")
 
           DAY_RUN=$(echo "$RUNS" | jq -er '.workflow_runs | length')
 
@@ -293,8 +293,19 @@ jobs:
             "s/^version:.*/version: ${VERSION_NAME}+${VERSION_CODE}/" \
             pubspec.yaml
 
+          ACTUAL_PUBSPEC_VERSION=$(sed -nE \
+            's/^version:[[:space:]]*([^[:space:]]+).*/\1/p' \
+            pubspec.yaml | sed -n '1p')
+
+          if [[ "$ACTUAL_PUBSPEC_VERSION" != "${VERSION_NAME}+${VERSION_CODE}" ]]; then
+            echo "::error::pubspec.yaml version does not match the expected version."
+            echo "Expected: ${VERSION_NAME}+${VERSION_CODE}"
+            echo "Actual: $ACTUAL_PUBSPEC_VERSION"
+            exit 1
+          fi
+
           echo "Upstream version: $ORIGINAL_VERSION"
-          echo "New Flutter version: ${VERSION_NAME}+${VERSION_CODE}"
+          echo "New Flutter version: $ACTUAL_PUBSPEC_VERSION"
 
           echo "EXPECTED_VERSION_NAME=$VERSION_NAME" >> "$GITHUB_ENV"
           echo "EXPECTED_VERSION_CODE=$VERSION_CODE" >> "$GITHUB_ENV"
@@ -438,7 +449,23 @@ jobs:
       - name: Clean Android build
         working-directory: upstream
         shell: bash
-        run: flutter clean
+        run: |
+          set -euo pipefail
+          flutter clean
+
+          GRADLE_PROPERTIES="android/gradle.properties"
+          touch "$GRADLE_PROPERTIES"
+
+          if grep -q '^force-version-code-ignoring-abi=' "$GRADLE_PROPERTIES"; then
+            sed -i \
+              's/^force-version-code-ignoring-abi=.*/force-version-code-ignoring-abi=true/' \
+              "$GRADLE_PROPERTIES"
+          else
+            echo 'force-version-code-ignoring-abi=true' >> "$GRADLE_PROPERTIES"
+          fi
+
+          echo "Configured Gradle to preserve the requested versionCode."
+          grep '^force-version-code-ignoring-abi=' "$GRADLE_PROPERTIES"
 
       - name: Build FlClash Android ARM64
         working-directory: upstream
@@ -524,6 +551,7 @@ jobs:
 
           if [[ "$APK_VERSION_CODE" != "$EXPECTED_VERSION_CODE" ]]; then
             echo "::error::Unexpected versionCode: $APK_VERSION_CODE"
+            echo "This usually means the ABI version-code offset was not disabled."
             exit 1
           fi
 
