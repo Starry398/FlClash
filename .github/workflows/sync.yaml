@@ -1,0 +1,607 @@
+name: sync
+
+on:
+  schedule:
+    - cron: '0 0 * * 0'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: read
+
+concurrency:
+  group: flclash-sync
+  cancel-in-progress: false
+
+env:
+  GRADLE_OPTS: -Dorg.gradle.vfs.watch=false
+
+jobs:
+  check-release:
+    name: Check upstream release
+    runs-on: ubuntu-24.04
+    outputs:
+      tag: ${{ steps.release.outputs.tag }}
+      should_build: ${{ steps.release.outputs.should_build }}
+
+    steps:
+      - name: Find latest stable upstream release
+        id: release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          RELEASE=$(curl -fsSL \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            https://api.github.com/repos/chen08209/FlClash/releases/latest)
+
+          TAG=$(echo "$RELEASE" | jq -er '.tag_name')
+
+          if ! [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Unexpected upstream stable release tag: $TAG"
+            exit 1
+          fi
+
+          echo "Latest upstream stable release: $TAG"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "Release $TAG already exists in this repository."
+            echo "Build and publish will be skipped."
+            echo "should_build=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "Release $TAG does not exist in this repository."
+            echo "should_build=true" >> "$GITHUB_OUTPUT"
+          fi
+
+  build:
+    name: Build FlClash Android ARM64
+    needs: check-release
+    if: needs.check-release.outputs.should_build == 'true'
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Checkout upstream release source
+        uses: actions/checkout@v4
+        with:
+          repository: chen08209/FlClash
+          ref: ${{ needs.check-release.outputs.tag }}
+          fetch-depth: 0
+          submodules: recursive
+          path: upstream
+
+      - name: Checkout custom resources and patches
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository }}
+          path: custom-files
+          sparse-checkout: |
+            starry/xml
+            starry/images
+            starry/patch
+          sparse-checkout-cone-mode: true
+
+      - name: Restore custom XML resources
+        working-directory: upstream
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          SOURCE="../custom-files/starry/xml"
+          TARGET="android/app/src/main/res/drawable"
+
+          test -d "$SOURCE" || {
+            echo "::error::Custom XML directory not found: $SOURCE"
+            exit 1
+          }
+
+          test -d "$TARGET" || {
+            echo "::error::FlClash drawable directory not found: $TARGET"
+            exit 1
+          }
+
+          XML_COUNT=0
+
+          while IFS= read -r -d '' file; do
+            filename=$(basename "$file")
+
+            if ! [[ "$filename" =~ ^[a-z0-9_]+\.xml$ ]]; then
+              echo "::error::Invalid Android resource filename: $filename"
+              exit 1
+            fi
+
+            cp -f "$file" "$TARGET/$filename"
+            echo "Restored XML: $filename"
+            XML_COUNT=$((XML_COUNT + 1))
+          done < <(find "$SOURCE" -maxdepth 1 -type f -name '*.xml' -print0)
+
+          echo "Restored $XML_COUNT XML file(s)."
+
+      - name: Restore custom image resources
+        working-directory: upstream
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          SOURCE="../custom-files/starry/images"
+          TARGET="assets/images"
+
+          test -d "$SOURCE" || {
+            echo "::error::Custom images directory not found: $SOURCE"
+            exit 1
+          }
+
+          test -d "$TARGET" || {
+            echo "::error::FlClash images directory not found: $TARGET"
+            exit 1
+          }
+
+          IMAGE_COUNT=0
+
+          while IFS= read -r -d '' file; do
+            filename=$(basename "$file")
+            cp -f "$file" "$TARGET/$filename"
+            echo "Restored image/resource: $filename"
+            IMAGE_COUNT=$((IMAGE_COUNT + 1))
+          done < <(find "$SOURCE" -maxdepth 1 -type f -print0)
+
+          echo "Restored $IMAGE_COUNT image/resource file(s)."
+
+      - name: Apply custom patches
+        working-directory: upstream
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          PATCH_DIR="../custom-files/starry/patch"
+
+          test -d "$PATCH_DIR" || {
+            echo "::error::Patch directory not found: $PATCH_DIR"
+            exit 1
+          }
+
+          shopt -s nullglob
+          PATCHES=("$PATCH_DIR"/*.patch)
+
+          if (( ${#PATCHES[@]} == 0 )); then
+            echo "No .patch files found. Skipping custom patches."
+          else
+            for patch in "${PATCHES[@]}"; do
+              echo "Checking patch: $(basename "$patch")"
+
+              if ! git apply --check "$patch"; then
+                echo "::error::Patch cannot be applied: $(basename "$patch")"
+                echo "The patch may conflict with upstream source or an earlier patch."
+                exit 1
+              fi
+
+              git apply "$patch"
+              echo "Applied patch: $(basename "$patch")"
+            done
+
+            echo "Applied ${#PATCHES[@]} custom patch(es)."
+          fi
+
+      - name: Read upstream toolchain and CA versions
+        id: upstream-config
+        working-directory: upstream
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          FILE=".github/workflows/build.yaml"
+
+          test -f "$FILE" || {
+            echo "::error::Upstream build workflow not found: $FILE"
+            exit 1
+          }
+
+          FLUTTER_VERSION=$(sed -nE \
+            "s/^[[:space:]]*FLUTTER_VERSION:[[:space:]]*['\"]?([^'\"[:space:]#]+).*/\1/p" \
+            "$FILE" | sed -n '1p')
+
+          GO_VERSION=$(sed -nE \
+            "s/^[[:space:]]*GO_VERSION:[[:space:]]*['\"]?([^'\"[:space:]#]+).*/\1/p" \
+            "$FILE" | sed -n '1p')
+
+          NDK_VERSION=$(sed -nE \
+            "s/^[[:space:]]*NDK_VERSION:[[:space:]]*['\"]?([^'\"[:space:]#]+).*/\1/p" \
+            "$FILE" | sed -n '1p')
+
+          CA_BUNDLE=$(sed -nE \
+            's/^[[:space:]]*CA_BUNDLE:[[:space:]]*([^[:space:]#]+).*/\1/p' \
+            "$FILE" | sed -n '1p')
+
+          CA_BUNDLE_SHA256=$(sed -nE \
+            's/^[[:space:]]*CA_BUNDLE_SHA256:[[:space:]]*([^[:space:]#]+).*/\1/p' \
+            "$FILE" | sed -n '1p')
+
+          if [[ -z "$FLUTTER_VERSION" || -z "$GO_VERSION" || -z "$NDK_VERSION" ]]; then
+            echo "::error::Failed to read Flutter, Go or NDK version."
+            exit 1
+          fi
+
+          if [[ -z "$CA_BUNDLE" || -z "$CA_BUNDLE_SHA256" ]]; then
+            echo "::error::Failed to read CA bundle name or SHA256."
+            exit 1
+          fi
+
+          echo "Flutter: $FLUTTER_VERSION"
+          echo "Go: $GO_VERSION"
+          echo "NDK: $NDK_VERSION"
+          echo "CA bundle: $CA_BUNDLE"
+
+          echo "flutter_version=$FLUTTER_VERSION" >> "$GITHUB_OUTPUT"
+          echo "go_version=$GO_VERSION" >> "$GITHUB_OUTPUT"
+          echo "ndk_version=$NDK_VERSION" >> "$GITHUB_OUTPUT"
+          echo "ca_bundle=$CA_BUNDLE" >> "$GITHUB_OUTPUT"
+          echo "ca_bundle_sha256=$CA_BUNDLE_SHA256" >> "$GITHUB_OUTPUT"
+
+      - name: Set application version and automatic build number
+        id: app-version
+        working-directory: upstream
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          ORIGINAL_VERSION=$(sed -nE \
+            's/^version:[[:space:]]*([^[:space:]]+).*/\1/p' \
+            pubspec.yaml | sed -n '1p')
+
+          if [[ -z "$ORIGINAL_VERSION" ]]; then
+            echo "::error::Cannot find version in pubspec.yaml"
+            exit 1
+          fi
+
+          VERSION_NAME="${ORIGINAL_VERSION%%+*}"
+
+          if ! [[ "$VERSION_NAME" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Unexpected upstream version: $VERSION_NAME"
+            exit 1
+          fi
+
+          DATE_BASE=$(date -u +%Y%m%d)
+          TODAY=$(date -u +%Y-%m-%d)
+
+          RUNS=$(curl -fsSL \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/workflows/sync.yaml/runs?created=${TODAY}T00:00:00Z..${TODAY}T23:59:59Z&per_page=100")
+
+          DAY_RUN=$(echo "$RUNS" | jq -er '.workflow_runs | length')
+
+          if (( DAY_RUN < 1 || DAY_RUN > 99 )); then
+            echo "::error::Invalid daily workflow run count: $DAY_RUN"
+            echo "The daily build number must be between 01 and 99."
+            exit 1
+          fi
+
+          VERSION_CODE=$((10#$DATE_BASE * 100 + DAY_RUN))
+
+          if (( VERSION_CODE > 2100000000 )); then
+            echo "::error::Android versionCode exceeds the supported limit."
+            exit 1
+          fi
+
+          sed -i -E \
+            "s/^version:.*/version: ${VERSION_NAME}+${VERSION_CODE}/" \
+            pubspec.yaml
+
+          echo "Upstream version: $ORIGINAL_VERSION"
+          echo "New Flutter version: ${VERSION_NAME}+${VERSION_CODE}"
+
+          echo "EXPECTED_VERSION_NAME=$VERSION_NAME" >> "$GITHUB_ENV"
+          echo "EXPECTED_VERSION_CODE=$VERSION_CODE" >> "$GITHUB_ENV"
+
+          grep '^version:' pubspec.yaml
+
+      - name: Set custom application ID
+        working-directory: upstream
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          FILE="android/app/build.gradle.kts"
+
+          grep -Fq 'applicationId = "com.follow.clash"' "$FILE" || {
+            echo "::error::Expected FlClash applicationId was not found."
+            echo "Please inspect the upstream Gradle configuration."
+            exit 1
+          }
+
+          sed -i \
+            's/applicationId = "com.follow.clash"/applicationId = "com.follow.clash.starry"/' \
+            "$FILE"
+
+          grep -F 'applicationId =' "$FILE"
+
+      - name: Fetch and verify CA certificates
+        working-directory: upstream
+        shell: bash
+        env:
+          CA_BUNDLE: ${{ steps.upstream-config.outputs.ca_bundle }}
+          CA_BUNDLE_SHA256: ${{ steps.upstream-config.outputs.ca_bundle_sha256 }}
+        run: |
+          set -euo pipefail
+
+          BUNDLE="core/Clash.Meta/component/ca/ca-certificates.crt"
+
+          mkdir -p "$(dirname "$BUNDLE")"
+
+          curl -fsSL --retry 3 \
+            -o "$BUNDLE" \
+            "https://curl.se/ca/$CA_BUNDLE"
+
+          echo "$CA_BUNDLE_SHA256  $BUNDLE" | sha256sum -c -
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: gradle
+
+      - name: Setup Android NDK
+        id: ndk
+        uses: nttld/setup-ndk@v1
+        with:
+          ndk-version: ${{ steps.upstream-config.outputs.ndk_version }}
+          add-to-path: true
+          link-to-sdk: true
+
+      - name: Configure Android NDK environment
+        shell: bash
+        env:
+          NDK_PATH: ${{ steps.ndk.outputs.ndk-path }}
+        run: |
+          set -euo pipefail
+
+          test -d "$NDK_PATH" || {
+            echo "::error::Android NDK directory not found: $NDK_PATH"
+            exit 1
+          }
+
+          echo "ANDROID_NDK_HOME=$NDK_PATH" >> "$GITHUB_ENV"
+          echo "ANDROID_NDK=$NDK_PATH" >> "$GITHUB_ENV"
+
+          mkdir -p "$HOME/.cargo"
+
+          cat > "$HOME/.cargo/config.toml" <<EOF
+          [target.aarch64-linux-android]
+          linker = "$NDK_PATH/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android26-clang"
+          EOF
+
+          cat "$HOME/.cargo/config.toml"
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ steps.upstream-config.outputs.go_version }}
+          cache-dependency-path: upstream/core/go.sum
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: ${{ steps.upstream-config.outputs.flutter_version }}
+          cache: true
+
+      - name: Clear Pub Cache Credentials
+        shell: bash
+        run: rm -f "$HOME/.pub-cache/credentials.json" || true
+
+      - name: Setup Android signing
+        working-directory: upstream
+        shell: bash
+        env:
+          KEYSTORE: ${{ secrets.KEYSTORE }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          STORE_PASSWORD: ${{ secrets.STORE_PASSWORD }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+
+          for name in KEYSTORE KEY_ALIAS STORE_PASSWORD KEY_PASSWORD; do
+            if [[ -z "${!name:-}" ]]; then
+              echo "::error::Missing GitHub Actions secret: $name"
+              exit 1
+            fi
+          done
+
+          printf '%s' "$KEYSTORE" | base64 --decode > android/app/keystore.jks
+
+          {
+            echo "storeFile=keystore.jks"
+            echo "keyAlias=$KEY_ALIAS"
+            echo "storePassword=$STORE_PASSWORD"
+            echo "keyPassword=$KEY_PASSWORD"
+          } >> android/local.properties
+
+          keytool -list \
+            -keystore android/app/keystore.jks \
+            -storepass "$STORE_PASSWORD" \
+            -alias "$KEY_ALIAS" >/dev/null
+
+          echo "Keystore and alias verified."
+
+      - name: Clean Android build
+        working-directory: upstream
+        shell: bash
+        run: flutter clean
+
+      - name: Build FlClash Android ARM64
+        working-directory: upstream
+        shell: bash
+        env:
+          ANDROID_NDK_HOME: ${{ steps.ndk.outputs.ndk-path }}
+        run: |
+          set -euo pipefail
+
+          flutter pub get
+          dart setup.dart android --arch arm64 --env stable -v
+
+      - name: Verify APK version and signature
+        working-directory: upstream
+        shell: bash
+        env:
+          STORE_PASSWORD: ${{ secrets.STORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+        run: |
+          set -euo pipefail
+
+          shopt -s nullglob
+          APK_FILES=(dist/*.apk)
+
+          if (( ${#APK_FILES[@]} != 1 )); then
+            echo "::error::Expected exactly one ARM64 APK, found ${#APK_FILES[@]}."
+            printf '%s\n' "${APK_FILES[@]}"
+            exit 1
+          fi
+
+          APK="${APK_FILES[0]}"
+
+          APKANALYZER=$(find "$ANDROID_SDK_ROOT" \
+            -type f -name apkanalyzer 2>/dev/null | sed -n '1p')
+
+          if [[ -z "$APKANALYZER" ]]; then
+            echo "::error::apkanalyzer not found."
+            exit 1
+          fi
+
+          APKSIGNER=$(find "$ANDROID_SDK_ROOT/build-tools" \
+            -type f -name apksigner 2>/dev/null | sort -V | tail -n 1)
+
+          if [[ -z "$APKSIGNER" ]]; then
+            echo "::error::apksigner not found."
+            exit 1
+          fi
+
+          KEYSTORE="android/app/keystore.jks"
+
+          test -f "$KEYSTORE" || {
+            echo "::error::Keystore not found: $KEYSTORE"
+            exit 1
+          }
+
+          EXPECTED_CERT=$(
+            keytool -exportcert \
+              -keystore "$KEYSTORE" \
+              -storepass "$STORE_PASSWORD" \
+              -alias "$KEY_ALIAS" \
+            | sha256sum \
+            | awk '{print toupper($1)}'
+          )
+
+          APK_PACKAGE=$("$APKANALYZER" manifest application-id "$APK")
+          APK_VERSION_NAME=$("$APKANALYZER" manifest version-name "$APK")
+          APK_VERSION_CODE=$("$APKANALYZER" manifest version-code "$APK")
+
+          echo "APK: $APK"
+          echo "Package: $APK_PACKAGE"
+          echo "versionName: $APK_VERSION_NAME"
+          echo "versionCode: $APK_VERSION_CODE"
+
+          if [[ "$APK_PACKAGE" != "com.follow.clash.starry" ]]; then
+            echo "::error::Unexpected application ID: $APK_PACKAGE"
+            exit 1
+          fi
+
+          if [[ "$APK_VERSION_NAME" != "$EXPECTED_VERSION_NAME" ]]; then
+            echo "::error::Unexpected versionName: $APK_VERSION_NAME"
+            exit 1
+          fi
+
+          if [[ "$APK_VERSION_CODE" != "$EXPECTED_VERSION_CODE" ]]; then
+            echo "::error::Unexpected versionCode: $APK_VERSION_CODE"
+            exit 1
+          fi
+
+          "$APKSIGNER" verify --verbose "$APK"
+
+          CERT_OUTPUT=$("$APKSIGNER" verify --print-certs "$APK" 2>&1)
+
+          ACTUAL_CERT=$(
+            printf '%s\n' "$CERT_OUTPUT" \
+              | sed -nE 's/.*certificate SHA-256 digest:[[:space:]]*//Ip' \
+              | sed -n '1p' \
+              | tr -d ':\r[:space:]' \
+              | tr '[:lower:]' '[:upper:]'
+          )
+
+          if [[ -z "$EXPECTED_CERT" || -z "$ACTUAL_CERT" ]]; then
+            echo "::error::Could not determine signing certificate fingerprint."
+            printf '%s\n' "$CERT_OUTPUT"
+            exit 1
+          fi
+
+          echo "Expected certificate SHA-256: $EXPECTED_CERT"
+          echo "Actual certificate SHA-256:   $ACTUAL_CERT"
+
+          if [[ "$ACTUAL_CERT" != "$EXPECTED_CERT" ]]; then
+            echo "::error::APK certificate does not match the configured keystore."
+            exit 1
+          fi
+
+          echo "APK version, package ID and signing certificate verified."
+
+          OUTPUT="dist/FlClash-${EXPECTED_VERSION_NAME}-android-arm64-v8a.apk"
+
+          if [[ "$APK" != "$OUTPUT" ]]; then
+            mv "$APK" "$OUTPUT"
+          fi
+
+          (
+            cd dist
+            sha256sum "$(basename "$OUTPUT")" \
+              > "$(basename "$OUTPUT").sha256"
+          )
+
+          echo "Final APK: $OUTPUT"
+          cat "${OUTPUT}.sha256"
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: FlClash-Android-ARM64-${{ needs.check-release.outputs.tag }}
+          path: |
+            upstream/dist/*.apk
+            upstream/dist/*.apk.sha256
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.check-release.outputs.tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "Release $RELEASE_TAG already exists. Refusing to overwrite it."
+            exit 1
+          fi
+
+          shopt -s nullglob
+          FILES=(upstream/dist/*.apk upstream/dist/*.apk.sha256)
+
+          if (( ${#FILES[@]} < 2 )); then
+            echo "::error::APK or SHA256 file is missing."
+            exit 1
+          fi
+
+          gh release create "$RELEASE_TAG" "${FILES[@]}" \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "$RELEASE_TAG" \
+            --generate-notes
