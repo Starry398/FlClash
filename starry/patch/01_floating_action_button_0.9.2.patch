@@ -1,0 +1,214 @@
+diff --git a/lib/ui/inherited.dart b/lib/ui/inherited.dart
+index 1feadb4..863a51d 100644
+--- a/lib/ui/inherited.dart
++++ b/lib/ui/inherited.dart
+@@ -31,6 +31,11 @@ class BottomInsetScope extends InheritedWidget {
+   static const double dockedSearchInset =
+       dockedSearchMargin + dockedSearchHeight;
+ 
++  /// What a floating action button takes from the end of a scrolling body:
++  /// its height and the margin below it, so the last row clears it.
++  static const double floatingActionInset =
++      kFloatingActionButtonMargin + 56 + kFloatingActionButtonMargin;
++
+   final double inset;
+ 
+   const BottomInsetScope({
+diff --git a/lib/ui/scaffold.dart b/lib/ui/scaffold.dart
+index 9ae9c66..39f2073 100644
+--- a/lib/ui/scaffold.dart
++++ b/lib/ui/scaffold.dart
+@@ -52,6 +52,10 @@ class CommonScaffold extends StatefulWidget {
+ 
+   final IconButtonData? primaryAction;
+ 
++  /// The one action the page is for, floated over the bottom end of the body
++  /// and clear of the floating dock. Pages only; a sheet has no such slot.
++  final Widget? floatingActionButton;
++
+   /// Folded into the overflow menu once the bar would hold more than three
+   /// buttons, as [primaryAction] and [menuItems] are; [actions] never fold.
+   final List<IconButtonData> iconActions;
+@@ -92,6 +96,7 @@ class CommonScaffold extends StatefulWidget {
+     this.searchInBar = false,
+     this.selectionActions = const [],
+     this.primaryAction,
++    this.floatingActionButton,
+     this.iconActions = const [],
+     this.menuItems = const [],
+     this.confirmationAction,
+@@ -946,9 +951,16 @@ class CommonScaffoldState extends State<CommonScaffold>
+       ),
+     );
+     final appBar = _buildAppBar(backAction, form);
+-    final content = form.hasDockedSearch
++    final fab = isCompact ? null : widget.floatingActionButton;
++    // The floating dock and a docked search overlap the scaffold's own bottom
++    // edge, so the corner button lifts by the room they take.
++    final lift =
++        bottomInset +
++        (form.hasDockedSearch ? BottomInsetScope.dockedSearchInset : 0);
++    final content = form.hasDockedSearch || fab != null
+         ? BottomInsetScope(
+-            inset: bottomInset + BottomInsetScope.dockedSearchInset,
++            inset:
++                lift + (fab == null ? 0 : BottomInsetScope.floatingActionInset),
+             child: body,
+           )
+         : body;
+@@ -958,6 +970,9 @@ class CommonScaffoldState extends State<CommonScaffold>
+         child: Scaffold(
+           appBar: appBar,
+           extendBodyBehindAppBar: barFloats,
++          floatingActionButton: fab == null
++              ? null
++              : Padding(padding: EdgeInsets.only(bottom: lift), child: fab),
+           body: _BodyScope(
+             child: docked == null
+                 ? content
+diff --git a/lib/views/dashboard/dashboard.dart b/lib/views/dashboard/dashboard.dart
+index 8842d6b..ab65712 100644
+--- a/lib/views/dashboard/dashboard.dart
++++ b/lib/views/dashboard/dashboard.dart
+@@ -15,6 +15,7 @@ import 'layout.dart';
+ import 'style.dart';
+ import 'widget_registry.dart';
+ import 'widgets/core_status_button.dart';
++import 'widgets/start_fab.dart';
+ import 'widgets/widgets.dart';
+ 
+ // Narrower columns leave a pair of service cells too tight for a status, so
+@@ -64,6 +65,7 @@ class _DashboardViewState extends ConsumerState<DashboardView> {
+           ? appLocalizations.editDashboard
+           : appLocalizations.dashboard,
+       actions: [if (!editing && coreLib == null) const CoreStatusButton()],
++      floatingActionButton: editable && !editing ? const StartFab() : null,
+       confirmationAction: editing
+           ? IconButtonData(
+               glyph: AppGlyphs.check,
+diff --git a/lib/views/dashboard/widgets/start_fab.dart b/lib/views/dashboard/widgets/start_fab.dart
+new file mode 100644
+index 0000000..c79cd06
+--- /dev/null
++++ b/lib/views/dashboard/widgets/start_fab.dart
+@@ -0,0 +1,61 @@
++import 'dart:ui' show FontFeature;
++
++import 'package:fl_clash/common/common.dart';
++import 'package:fl_clash/providers/providers.dart';
++import 'package:fl_clash/ui/icons/icons.dart';
++import 'package:fl_clash/widgets/widgets.dart';
++import 'package:flutter_riverpod/flutter_riverpod.dart';
++import 'package:material_ui/material_ui.dart';
++
++/// Starts and stops the tunnel from the corner of the page. Stopped, it is a
++/// plain play button; running, it widens into a pause button that carries the
++/// run time, the way the delay test button on the proxies page is shaped.
++class StartFab extends ConsumerWidget {
++  const StartFab({super.key});
++
++  static const _morphDuration = Duration(milliseconds: 360);
++
++  @override
++  Widget build(BuildContext context, WidgetRef ref) {
++    final colorScheme = context.colorScheme;
++    final appLocalizations = context.appLocalizations;
++    final hasProfile = ref.watch(
++      profilesProvider.select((state) => state.isNotEmpty),
++    );
++    final isStart = ref.watch(isStartProvider);
++    final suspended = isStart && ref.watch(suspendProvider);
++    final runTime = isStart ? ref.watch(runTimeProvider) : null;
++    final ink = hasProfile
++        ? colorScheme.onPrimary
++        : colorScheme.onSurface.withValues(alpha: 0.38);
++    return FloatingActionButton.extended(
++      heroTag: null,
++      isExtended: isStart,
++      tooltip: suspended
++          ? appLocalizations.suspended
++          : isStart
++          ? appLocalizations.stop
++          : appLocalizations.start,
++      backgroundColor: hasProfile
++          ? colorScheme.primary
++          : colorScheme.onSurface.withValues(alpha: 0.12),
++      foregroundColor: ink,
++      onPressed: hasProfile
++          ? ref.read(commonActionProvider.notifier).toggleRunning
++          : null,
++      icon: suspended
++          ? GlyphIcon(AppGlyphs.wifiOff, color: ink, fill: 1)
++          : TweenAnimationBuilder<double>(
++              tween: Tween(end: isStart ? 1 : 0),
++              duration: context.motionDuration(_morphDuration),
++              curve: Curves.easeOutBack,
++              builder: (_, progress, _) =>
++                  GlyphIcon(AppGlyphs.playPause(progress), color: ink, fill: 1),
++            ),
++      label: Text(
++        getTimeText(runTime),
++        style: const TextStyle(fontFeatures: [FontFeature.tabularFigures()]),
++      ),
++    );
++  }
++}
+diff --git a/lib/views/proxies/proxies.dart b/lib/views/proxies/proxies.dart
+index f2426f4..681f4d2 100644
+--- a/lib/views/proxies/proxies.dart
++++ b/lib/views/proxies/proxies.dart
+@@ -113,16 +113,42 @@ class _ProxiesViewState extends ConsumerState<ProxiesView> {
+     ];
+   }
+ 
++  void _delayTestCurrentGroup() {
++    _proxiesTabKey.currentState?.delayTestCurrentGroup();
++  }
++
++  /// The delay test of the current group, in the corner of the page.
++  Widget? _buildFloatingAction() {
++    if (!_isTab || widget.picker) {
++      return null;
++    }
++    final isDelayTesting = ref.watch(currentGroupDelayTestingProvider);
++    final label = context.appLocalizations.delayTest;
++    return FloatingActionButton.extended(
++      heroTag: null,
++      tooltip: label,
++      onPressed: isDelayTesting ? null : _delayTestCurrentGroup,
++      icon: isDelayTesting
++          ? SizedBox.square(
++              dimension: 24,
++              child: CommonCircleLoading(color: context.colorScheme.onPrimary),
++            )
++          : const GlyphIcon(AppGlyphs.bolt, fill: 1),
++      label: Text(label),
++      backgroundColor: context.colorScheme.primary,
++      foregroundColor: context.colorScheme.onPrimary,
++    );
++  }
++
+   IconButtonData? _buildPrimaryAction() {
+-    if (!_isTab) {
++    // A page has the corner button; a sheet keeps the bolt in its bar.
++    if (!_isTab || !widget.picker) {
+       return null;
+     }
+     final isDelayTesting = ref.watch(currentGroupDelayTestingProvider);
+     return IconButtonData(
+       glyph: AppGlyphs.bolt,
+-      onPressed: () {
+-        _proxiesTabKey.currentState?.delayTestCurrentGroup();
+-      },
++      onPressed: _delayTestCurrentGroup,
+       tooltip: context.appLocalizations.delayTest,
+       isLoading: isDelayTesting,
+     );
+@@ -160,6 +186,7 @@ class _ProxiesViewState extends ConsumerState<ProxiesView> {
+       isLoading: isLoading,
+       resizeToAvoidBottomInset: false,
+       primaryAction: primaryAction,
++      floatingActionButton: _buildFloatingAction(),
+       searchActions: [?primaryAction],
+       iconActions: [
+         if (_isTab && !picker)
