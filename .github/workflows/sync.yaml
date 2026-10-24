@@ -589,22 +589,13 @@ jobs:
             mv "$APK" "$OUTPUT"
           fi
 
-          (
-            cd dist
-            sha256sum "$(basename "$OUTPUT")" \
-              > "$(basename "$OUTPUT").sha256"
-          )
-
           echo "Final APK: $OUTPUT"
-          cat "${OUTPUT}.sha256"
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
           name: FlClash-Android-ARM64-${{ needs.check-release.outputs.tag }}
-          path: |
-            upstream/dist/*.apk
-            upstream/dist/*.apk.sha256
+          path: upstream/dist/*.apk
           if-no-files-found: error
           retention-days: 30
 
@@ -622,10 +613,11 @@ jobs:
           fi
 
           shopt -s nullglob
-          FILES=(upstream/dist/*.apk upstream/dist/*.apk.sha256)
+          FILES=(upstream/dist/*.apk)
 
-          if (( ${#FILES[@]} < 2 )); then
-            echo "::error::APK or SHA256 file is missing."
+          if (( ${#FILES[@]} != 1 )); then
+            echo "::error::Expected exactly one APK file, found ${#FILES[@]}."
+            printf '%s\n' "${FILES[@]}"
             exit 1
           fi
 
