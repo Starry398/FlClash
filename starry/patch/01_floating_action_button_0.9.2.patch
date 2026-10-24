@@ -1,8 +1,182 @@
+diff --git a/lib/common/l10n_labels.dart b/lib/common/l10n_labels.dart
+index a97c4b9..427e1cc 100644
+--- a/lib/common/l10n_labels.dart
++++ b/lib/common/l10n_labels.dart
+@@ -1,5 +1,6 @@
+ import 'package:fl_clash/enum/enum.dart';
+ import 'package:fl_clash/ui/color.dart';
++import 'package:intl/intl.dart';
+ import 'package:material_ui/material_ui.dart';
+ 
+ import 'app_localizations.dart';
+@@ -104,6 +105,8 @@ extension ColorStyleL10n on ColorStyle {
+       ColorStyle.tinted => appLocalizations.tintedStyle,
+       ColorStyle.soft => appLocalizations.softStyle,
+       ColorStyle.monochrome => appLocalizations.monochromeScheme,
++      ColorStyle.accent =>
++        Intl.getCurrentLocale().startsWith('zh') ? '点缀' : 'Accent',
+     };
+   }
+ }
+diff --git a/lib/models/generated/config.g.dart b/lib/models/generated/config.g.dart
+index 91885a5..1a8aaf4 100644
+--- a/lib/models/generated/config.g.dart
++++ b/lib/models/generated/config.g.dart
+@@ -400,6 +400,7 @@ const _$ColorStyleEnumMap = {
+   ColorStyle.tinted: 'tinted',
+   ColorStyle.soft: 'soft',
+   ColorStyle.monochrome: 'monochrome',
++  ColorStyle.accent: 'accent',
+ };
+ 
+ const _$LiquidGlassModeEnumMap = {
+diff --git a/lib/ui/color.dart b/lib/ui/color.dart
+index 8583b25..a356d99 100644
+--- a/lib/ui/color.dart
++++ b/lib/ui/color.dart
+@@ -18,10 +18,14 @@ enum ColorStyle {
+   vivid,
+   tinted,
+   soft,
+-  monochrome;
++  monochrome,
++
++  /// Grey surfaces and containers with the seed on the accents alone: the
++  /// buttons, switches and highlights.
++  accent;
+ 
+   Variant get _variant => switch (this) {
+-    vivid || tinted => Variant.content,
++    vivid || tinted || accent => Variant.content,
+     soft => Variant.tonalSpot,
+     monochrome => Variant.monochrome,
+   };
+@@ -40,8 +44,21 @@ ColorScheme seededColorScheme({
+   final primary = scheme.primaryPalette;
+   final container = TonalPalette.of(
+     primary.hue,
+-    min(primary.chroma, _primaryContainerChroma),
++    min(
++      primary.chroma,
++      style == ColorStyle.accent
++          ? _accentContainerChroma
++          : _primaryContainerChroma,
++    ),
+   );
++  // The accent style keeps every role but the primary near grey.
++  final quiet = style == ColorStyle.accent
++      ? TonalPalette.of(primary.hue, _accentContainerChroma)
++      : null;
++  Color secondaryRole(DynamicColor color, int lightTone, int darkTone) =>
++      quiet == null
++      ? Color(color.getArgb(scheme))
++      : Color(quiet.get(dark ? darkTone : lightTone));
+   final tint = style == ColorStyle.tinted
+       ? min(source.chroma / _tintDivisor, _maxTintChroma)
+       : null;
+@@ -60,7 +77,9 @@ ColorScheme seededColorScheme({
+ 
+   final paperChroma = dark ? _surfaceChroma : _paperChroma;
+   final accent = switch (style) {
+-    ColorStyle.vivid || ColorStyle.tinted => _accent(seedColor, source, dark),
++    ColorStyle.vivid ||
++    ColorStyle.tinted ||
++    ColorStyle.accent => _accent(seedColor, source, dark),
+     ColorStyle.soft || ColorStyle.monochrome => null,
+   };
+   final primaryColor = accent?.primary ?? role(MaterialDynamicColors.primary);
+@@ -75,20 +94,36 @@ ColorScheme seededColorScheme({
+     primaryFixedDim: role(MaterialDynamicColors.primaryFixedDim),
+     onPrimaryFixed: role(MaterialDynamicColors.onPrimaryFixed),
+     onPrimaryFixedVariant: role(MaterialDynamicColors.onPrimaryFixedVariant),
+-    secondary: role(MaterialDynamicColors.secondary),
+-    onSecondary: role(MaterialDynamicColors.onSecondary),
+-    secondaryContainer: role(MaterialDynamicColors.secondaryContainer),
+-    onSecondaryContainer: role(MaterialDynamicColors.onSecondaryContainer),
++    secondary: secondaryRole(MaterialDynamicColors.secondary, 40, 80),
++    onSecondary: secondaryRole(MaterialDynamicColors.onSecondary, 100, 20),
++    secondaryContainer: secondaryRole(
++      MaterialDynamicColors.secondaryContainer,
++      90,
++      30,
++    ),
++    onSecondaryContainer: secondaryRole(
++      MaterialDynamicColors.onSecondaryContainer,
++      10,
++      90,
++    ),
+     secondaryFixed: role(MaterialDynamicColors.secondaryFixed),
+     secondaryFixedDim: role(MaterialDynamicColors.secondaryFixedDim),
+     onSecondaryFixed: role(MaterialDynamicColors.onSecondaryFixed),
+     onSecondaryFixedVariant: role(
+       MaterialDynamicColors.onSecondaryFixedVariant,
+     ),
+-    tertiary: role(MaterialDynamicColors.tertiary),
+-    onTertiary: role(MaterialDynamicColors.onTertiary),
+-    tertiaryContainer: role(MaterialDynamicColors.tertiaryContainer),
+-    onTertiaryContainer: role(MaterialDynamicColors.onTertiaryContainer),
++    tertiary: secondaryRole(MaterialDynamicColors.tertiary, 40, 80),
++    onTertiary: secondaryRole(MaterialDynamicColors.onTertiary, 100, 20),
++    tertiaryContainer: secondaryRole(
++      MaterialDynamicColors.tertiaryContainer,
++      90,
++      30,
++    ),
++    onTertiaryContainer: secondaryRole(
++      MaterialDynamicColors.onTertiaryContainer,
++      10,
++      90,
++    ),
+     tertiaryFixed: role(MaterialDynamicColors.tertiaryFixed),
+     tertiaryFixedDim: role(MaterialDynamicColors.tertiaryFixedDim),
+     onTertiaryFixed: role(MaterialDynamicColors.onTertiaryFixed),
+@@ -151,6 +186,8 @@ const _maxTintChroma = 10.0;
+ 
+ const _primaryContainerChroma = 48.0;
+ 
++const _accentContainerChroma = 6.0;
++
+ const _darkOnSurfaceTone = 97;
+ 
+ const _darkCardTone = 15.0;
+@@ -213,7 +250,9 @@ DynamicScheme _dynamicScheme(Hct source, bool dark, ColorStyle style) {
+           neutralVariantPalette: last.neutralVariantPalette,
+         )
+       : switch (style) {
+-          ColorStyle.vivid || ColorStyle.tinted => SchemeContent(
++          ColorStyle.vivid ||
++          ColorStyle.tinted ||
++          ColorStyle.accent => SchemeContent(
+             sourceColorHct: source,
+             isDark: dark,
+             contrastLevel: 0,
 diff --git a/lib/ui/inherited.dart b/lib/ui/inherited.dart
-index 1feadb4..863a51d 100644
+index 1feadb4..4da32b0 100644
 --- a/lib/ui/inherited.dart
 +++ b/lib/ui/inherited.dart
-@@ -31,6 +31,11 @@ class BottomInsetScope extends InheritedWidget {
+@@ -25,12 +25,33 @@ class PageActivityScope extends InheritedWidget {
+   }
+ }
+ 
++/// Whether the page beside a corner button has been scrolled down, which is
++/// when the button shrinks to its icon. [CommonScaffold] drives it.
++class FloatingActionScope extends InheritedNotifier<ValueNotifier<bool>> {
++  const FloatingActionScope({
++    super.key,
++    required ValueNotifier<bool> collapsed,
++    required super.child,
++  }) : super(notifier: collapsed);
++
++  static bool collapsedOf(BuildContext context) {
++    final scope = context
++        .dependOnInheritedWidgetOfExactType<FloatingActionScope>();
++    return scope?.notifier?.value ?? false;
++  }
++}
++
+ class BottomInsetScope extends InheritedWidget {
+   static const double dockedSearchHeight = 48;
+   static const double dockedSearchMargin = kFloatingActionButtonMargin;
    static const double dockedSearchInset =
        dockedSearchMargin + dockedSearchHeight;
  
@@ -15,7 +189,7 @@ index 1feadb4..863a51d 100644
  
    const BottomInsetScope({
 diff --git a/lib/ui/scaffold.dart b/lib/ui/scaffold.dart
-index 9ae9c66..39f2073 100644
+index 9ae9c66..5fa2a4c 100644
 --- a/lib/ui/scaffold.dart
 +++ b/lib/ui/scaffold.dart
 @@ -52,6 +52,10 @@ class CommonScaffold extends StatefulWidget {
@@ -37,7 +211,44 @@ index 9ae9c66..39f2073 100644
      this.iconActions = const [],
      this.menuItems = const [],
      this.confirmationAction,
-@@ -946,9 +951,16 @@ class CommonScaffoldState extends State<CommonScaffold>
+@@ -108,6 +113,7 @@ class CommonScaffoldState extends State<CommonScaffold>
+     with SingleTickerProviderStateMixin {
+   late final ValueNotifier<AppBarState> _appBarState;
+   final ValueNotifier<bool> _loadingNotifier = ValueNotifier(false);
++  final ValueNotifier<bool> _fabCollapsed = ValueNotifier(false);
+   final ValueNotifier<List<String>> _keywordsNotifier = ValueNotifier([]);
+   final _textController = TextEditingController();
+   final _searchFocusNode = FocusNode();
+@@ -344,10 +350,28 @@ class CommonScaffoldState extends State<CommonScaffold>
+     _searchOrigin.dispose();
+     _searchCovered.dispose();
+     _loadingNotifier.dispose();
++    _fabCollapsed.dispose();
+     _keywordsNotifier.dispose();
+     super.dispose();
+   }
+ 
++  /// A corner button shrinks while the page scrolls down and comes back when
++  /// it scrolls up or returns to the top.
++  bool _handleFabScroll(ScrollNotification notification) {
++    if (notification.metrics.axis != Axis.vertical ||
++        notification is! ScrollUpdateNotification) {
++      return false;
++    }
++    final delta = notification.scrollDelta ?? 0;
++    final metrics = notification.metrics;
++    if (metrics.pixels <= metrics.minScrollExtent + 8 || delta < -2) {
++      _fabCollapsed.value = false;
++    } else if (delta > 2) {
++      _fabCollapsed.value = true;
++    }
++    return false;
++  }
++
+   void addKeyword(String keyword) {
+     final isContains = _keywordsNotifier.value.contains(keyword);
+     if (isContains) return;
+@@ -946,35 +970,54 @@ class CommonScaffoldState extends State<CommonScaffold>
        ),
      );
      final appBar = _buildAppBar(backAction, form);
@@ -56,16 +267,63 @@ index 9ae9c66..39f2073 100644
              child: body,
            )
          : body;
-@@ -958,6 +970,9 @@ class CommonScaffoldState extends State<CommonScaffold>
-         child: Scaffold(
-           appBar: appBar,
-           extendBodyBehindAppBar: barFloats,
-+          floatingActionButton: fab == null
-+              ? null
-+              : Padding(padding: EdgeInsets.only(bottom: lift), child: fab),
-           body: _BodyScope(
-             child: docked == null
-                 ? content
+     if (!isCompact) {
+       final docked = form.dockedSearch;
++      final scrolled = fab == null
++          ? content
++          : NotificationListener<ScrollNotification>(
++              onNotification: _handleFabScroll,
++              child: content,
++            );
+       return AppBarInsetScope(
+-        child: Scaffold(
+-          appBar: appBar,
+-          extendBodyBehindAppBar: barFloats,
+-          body: _BodyScope(
+-            child: docked == null
+-                ? content
+-                : Stack(
+-                    fit: StackFit.expand,
+-                    children: [
+-                      content,
+-                      if (!_sorting)
+-                        Align(
+-                          alignment: Alignment.bottomCenter,
+-                          child: _buildDockedSearch(docked),
+-                        ),
+-                    ],
+-                  ),
++        child: FloatingActionScope(
++          collapsed: _fabCollapsed,
++          child: Scaffold(
++            appBar: appBar,
++            extendBodyBehindAppBar: barFloats,
++            floatingActionButton: fab == null
++                ? null
++                : Padding(padding: EdgeInsets.only(bottom: lift), child: fab),
++            body: _BodyScope(
++              child: docked == null
++                  ? scrolled
++                  : Stack(
++                      fit: StackFit.expand,
++                      children: [
++                        scrolled,
++                        if (!_sorting)
++                          Align(
++                            alignment: Alignment.bottomCenter,
++                            child: _buildDockedSearch(docked),
++                          ),
++                      ],
++                    ),
++            ),
++            resizeToAvoidBottomInset: widget.resizeToAvoidBottomInset,
++            backgroundColor: widget.backgroundColor,
+           ),
+-          resizeToAvoidBottomInset: widget.resizeToAvoidBottomInset,
+-          backgroundColor: widget.backgroundColor,
+         ),
+       );
+     }
 diff --git a/lib/views/dashboard/dashboard.dart b/lib/views/dashboard/dashboard.dart
 index 8842d6b..ab65712 100644
 --- a/lib/views/dashboard/dashboard.dart
@@ -86,28 +344,240 @@ index 8842d6b..ab65712 100644
        confirmationAction: editing
            ? IconButtonData(
                glyph: AppGlyphs.check,
+diff --git a/lib/views/dashboard/widgets/current_outbound.dart b/lib/views/dashboard/widgets/current_outbound.dart
+index 4fcfb2d..9ccace6 100644
+--- a/lib/views/dashboard/widgets/current_outbound.dart
++++ b/lib/views/dashboard/widgets/current_outbound.dart
+@@ -15,11 +15,13 @@ import 'package:fl_clash/views/dashboard/layout.dart';
+ import 'package:fl_clash/views/dashboard/probe_start_hold.dart';
+ import 'package:fl_clash/views/dashboard/style.dart';
+ import 'package:fl_clash/widgets/widgets.dart';
++import 'package:flutter/foundation.dart' show clampDouble;
+ import 'package:flutter_riverpod/flutter_riverpod.dart';
+ import 'package:material_new_shapes/material_new_shapes.dart';
+ import 'package:material_ui/material_ui.dart';
+ 
+ import 'card.dart';
++import 'flclash_mark.dart';
+ 
+ const _builtinOutbounds = {'DIRECT', 'REJECT', 'REJECT-DROP', 'PASS'};
+ 
+@@ -833,16 +835,66 @@ class _StartToggleState extends ConsumerState<_StartToggle>
+                           color: ink,
+                           fill: 1,
+                         )
+-                      : TweenAnimationBuilder<double>(
+-                          tween: Tween(end: widget.running ? 1 : 0),
+-                          duration: _morphDuration,
+-                          curve: Curves.easeOutBack,
+-                          builder: (_, progress, _) => GlyphIcon(
+-                            AppGlyphs.playPause(progress),
+-                            size: size * 0.34,
+-                            color: ink,
+-                            fill: 1,
+-                          ),
++                      : AnimatedBuilder(
++                          animation: _progress,
++                          // Play while stopped. Running, the shape holds the
++                          // launcher icon: its painting and the mark over it.
++                          builder: (_, _) {
++                            final value = _progress.value;
++                            final shown = clampDouble(value, 0, 1);
++                            return Stack(
++                              alignment: Alignment.center,
++                              fit: StackFit.expand,
++                              children: [
++                                Opacity(
++                                  opacity: shown,
++                                  child: ClipPath(
++                                    clipper: _MorphClipper(value),
++                                    child: Transform.scale(
++                                      scale: 1.5,
++                                      child: Image.asset(
++                                        'assets/images/monet_icon.png',
++                                        fit: BoxFit.cover,
++                                        cacheWidth: 256,
++                                        gaplessPlayback: true,
++                                        errorBuilder: (_, _, _) =>
++                                            const SizedBox.shrink(),
++                                      ),
++                                    ),
++                                  ),
++                                ),
++                                Opacity(
++                                  opacity: 1 - shown,
++                                  child: Center(
++                                    child: Transform.scale(
++                                      scale: 1 - 0.3 * shown,
++                                      child: GlyphIcon(
++                                        AppGlyphs.playPause(0),
++                                        size: size * 0.34,
++                                        color: ink,
++                                        fill: 1,
++                                      ),
++                                    ),
++                                  ),
++                                ),
++                                Opacity(
++                                  opacity: shown,
++                                  child: Center(
++                                    child: Transform.scale(
++                                      scale: 0.7 + 0.3 * value,
++                                      child: FlClashMark(
++                                        size: size * 0.6,
++                                        color: const Color(0xFFFFFFFF),
++                                        secondary: const Color(0xFFF2ECFF),
++                                        dot: const Color(0xFFFFE9A6),
++                                        shadow: true,
++                                      ),
++                                    ),
++                                  ),
++                                ),
++                              ],
++                            );
++                          },
+                         ),
+                 ),
+               ),
+diff --git a/lib/views/dashboard/widgets/flclash_mark.dart b/lib/views/dashboard/widgets/flclash_mark.dart
+new file mode 100644
+index 0000000..842c311
+--- /dev/null
++++ b/lib/views/dashboard/widgets/flclash_mark.dart
+@@ -0,0 +1,108 @@
++import 'dart:math' as math;
++
++import 'package:material_ui/material_ui.dart';
++
++/// The FlClash logo, two slanted bars over a dot, drawn as a vector so it
++/// takes any colour and stays sharp at any size. [size] is its height. The
++/// bars take [color] and [secondary], the dot [dot], each [color] when null;
++/// [shadow] sets it off from a busy background, as on the launcher icon.
++class FlClashMark extends StatelessWidget {
++  const FlClashMark({
++    super.key,
++    required this.size,
++    required this.color,
++    this.secondary,
++    this.dot,
++    this.shadow = false,
++  });
++
++  final double size;
++  final Color color;
++  final Color? secondary;
++  final Color? dot;
++  final bool shadow;
++
++  @override
++  Widget build(BuildContext context) {
++    return SizedBox(
++      width: size * _MarkPainter._width / _MarkPainter._height,
++      height: size,
++      child: CustomPaint(
++        painter: _MarkPainter(color, secondary ?? color, dot ?? color, shadow),
++      ),
++    );
++  }
++}
++
++class _MarkPainter extends CustomPainter {
++  const _MarkPainter(this.bar, this.secondary, this.dot, this.shadow);
++
++  final Color bar;
++  final Color secondary;
++  final Color dot;
++  final bool shadow;
++
++  // The logo's own coordinates: the box around the three shapes, and each
++  // bar's centre line, which a stroke of [_radius] on both sides fills out.
++  static const _left = 51.65;
++  static const _top = 33.19;
++  static const _width = 129.53;
++  static const _height = 173.14;
++  static const _radius = 18.0;
++  static const _upper = (Offset(69.65, 105.19), Offset(163.18, 51.19));
++  static const _lower = (Offset(93.65, 146.76), Offset(140.42, 119.76));
++  static const _dotCenter = Offset(117.65, 188.33);
++
++  void _shapes(Canvas canvas, Paint upper, Paint lower, Paint dotPaint) {
++    for (final ((from, to), paint) in [(_upper, upper), (_lower, lower)]) {
++      final line = to - from;
++      canvas
++        ..save()
++        ..translate((from.dx + to.dx) / 2, (from.dy + to.dy) / 2)
++        ..rotate(math.atan2(line.dy, line.dx))
++        ..drawRRect(
++          RRect.fromRectAndRadius(
++            Rect.fromCenter(
++              center: Offset.zero,
++              width: line.distance + _radius * 2,
++              height: _radius * 2,
++            ),
++            const Radius.circular(_radius),
++          ),
++          paint,
++        )
++        ..restore();
++    }
++    canvas.drawCircle(_dotCenter, _radius, dotPaint);
++  }
++
++  @override
++  void paint(Canvas canvas, Size size) {
++    Paint fill(Color color) => Paint()
++      ..color = color
++      ..isAntiAlias = true;
++    canvas
++      ..save()
++      ..scale(size.height / _height)
++      ..translate(-_left, -_top);
++    if (shadow) {
++      final cast = Paint()
++        ..color = const Color(0x6B1E1446)
++        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 7);
++      canvas
++        ..save()
++        ..translate(0, 9);
++      _shapes(canvas, cast, cast, cast);
++      canvas.restore();
++    }
++    _shapes(canvas, fill(bar), fill(secondary), fill(dot));
++    canvas.restore();
++  }
++
++  @override
++  bool shouldRepaint(_MarkPainter oldDelegate) =>
++      oldDelegate.bar != bar ||
++      oldDelegate.secondary != secondary ||
++      oldDelegate.dot != dot ||
++      oldDelegate.shadow != shadow;
++}
 diff --git a/lib/views/dashboard/widgets/start_fab.dart b/lib/views/dashboard/widgets/start_fab.dart
 new file mode 100644
-index 0000000..c79cd06
+index 0000000..722d6f1
 --- /dev/null
 +++ b/lib/views/dashboard/widgets/start_fab.dart
-@@ -0,0 +1,61 @@
+@@ -0,0 +1,80 @@
 +import 'dart:ui' show FontFeature;
 +
 +import 'package:fl_clash/common/common.dart';
 +import 'package:fl_clash/providers/providers.dart';
 +import 'package:fl_clash/ui/icons/icons.dart';
 +import 'package:fl_clash/widgets/widgets.dart';
++import 'package:flutter/foundation.dart' show clampDouble;
 +import 'package:flutter_riverpod/flutter_riverpod.dart';
 +import 'package:material_ui/material_ui.dart';
 +
 +/// Starts and stops the tunnel from the corner of the page. Stopped, it is a
 +/// plain play button; running, it widens into a pause button that carries the
-+/// run time, the way the delay test button on the proxies page is shaped.
++/// run time, and it shrinks to the pause icon while the page scrolls down.
++/// It rises into place when the page opens.
 +class StartFab extends ConsumerWidget {
 +  const StartFab({super.key});
 +
 +  static const _morphDuration = Duration(milliseconds: 360);
++  static const _enterDuration = Duration(milliseconds: 760);
 +
 +  @override
 +  Widget build(BuildContext context, WidgetRef ref) {
@@ -119,12 +589,13 @@ index 0000000..c79cd06
 +    final isStart = ref.watch(isStartProvider);
 +    final suspended = isStart && ref.watch(suspendProvider);
 +    final runTime = isStart ? ref.watch(runTimeProvider) : null;
++    final collapsed = FloatingActionScope.collapsedOf(context);
 +    final ink = hasProfile
 +        ? colorScheme.onPrimary
 +        : colorScheme.onSurface.withValues(alpha: 0.38);
-+    return FloatingActionButton.extended(
++    final button = FloatingActionButton.extended(
 +      heroTag: null,
-+      isExtended: isStart,
++      isExtended: isStart && !collapsed,
 +      tooltip: suspended
 +          ? appLocalizations.suspended
 +          : isStart
@@ -151,13 +622,28 @@ index 0000000..c79cd06
 +        style: const TextStyle(fontFeatures: [FontFeature.tabularFigures()]),
 +      ),
 +    );
++    // Runs once, when the button first appears: it waits a beat for the page,
++    // then rises and settles with a small overshoot.
++    return TweenAnimationBuilder<double>(
++      tween: Tween(begin: 0, end: 1),
++      duration: context.motionDuration(_enterDuration),
++      curve: const Interval(0.3, 1, curve: Curves.easeOutBack),
++      child: button,
++      builder: (_, t, child) => Opacity(
++        opacity: clampDouble(t, 0, 1),
++        child: Transform.translate(
++          offset: Offset(0, 24 * (1 - t)),
++          child: Transform.scale(scale: 0.7 + 0.3 * t, child: child),
++        ),
++      ),
++    );
 +  }
 +}
 diff --git a/lib/views/proxies/proxies.dart b/lib/views/proxies/proxies.dart
-index f2426f4..681f4d2 100644
+index f2426f4..cb88b63 100644
 --- a/lib/views/proxies/proxies.dart
 +++ b/lib/views/proxies/proxies.dart
-@@ -113,16 +113,42 @@ class _ProxiesViewState extends ConsumerState<ProxiesView> {
+@@ -113,16 +113,47 @@ class _ProxiesViewState extends ConsumerState<ProxiesView> {
      ];
    }
  
@@ -172,19 +658,24 @@ index f2426f4..681f4d2 100644
 +    }
 +    final isDelayTesting = ref.watch(currentGroupDelayTestingProvider);
 +    final label = context.appLocalizations.delayTest;
-+    return FloatingActionButton.extended(
-+      heroTag: null,
-+      tooltip: label,
-+      onPressed: isDelayTesting ? null : _delayTestCurrentGroup,
-+      icon: isDelayTesting
-+          ? SizedBox.square(
-+              dimension: 24,
-+              child: CommonCircleLoading(color: context.colorScheme.onPrimary),
-+            )
-+          : const GlyphIcon(AppGlyphs.bolt, fill: 1),
-+      label: Text(label),
-+      backgroundColor: context.colorScheme.primary,
-+      foregroundColor: context.colorScheme.onPrimary,
++    return Builder(
++      builder: (context) => FloatingActionButton.extended(
++        heroTag: null,
++        isExtended: !FloatingActionScope.collapsedOf(context),
++        tooltip: label,
++        onPressed: isDelayTesting ? null : _delayTestCurrentGroup,
++        icon: isDelayTesting
++            ? SizedBox.square(
++                dimension: 24,
++                child: CommonCircleLoading(
++                  color: context.colorScheme.onPrimary,
++                ),
++              )
++            : const GlyphIcon(AppGlyphs.bolt, fill: 1),
++        label: Text(label),
++        backgroundColor: context.colorScheme.primary,
++        foregroundColor: context.colorScheme.onPrimary,
++      ),
 +    );
 +  }
 +
@@ -204,7 +695,7 @@ index f2426f4..681f4d2 100644
        tooltip: context.appLocalizations.delayTest,
        isLoading: isDelayTesting,
      );
-@@ -160,6 +186,7 @@ class _ProxiesViewState extends ConsumerState<ProxiesView> {
+@@ -160,6 +191,7 @@ class _ProxiesViewState extends ConsumerState<ProxiesView> {
        isLoading: isLoading,
        resizeToAvoidBottomInset: false,
        primaryAction: primaryAction,
