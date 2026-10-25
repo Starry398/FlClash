@@ -25,8 +25,6 @@ permissions:
   contents: write
   actions: read
 
-# Stable and prerelease builds share one versionCode counter.
-# Keep this group different from the caller workflows' concurrency groups.
 concurrency:
   group: flclash-versioncode-${{ github.repository }}
   cancel-in-progress: false
@@ -43,7 +41,6 @@ jobs:
     runs-on: ubuntu-24.04
 
     steps:
-      # 1. Determine this repository's default branch.
       - name: Get repository default branch
         id: default-branch
         shell: bash
@@ -63,7 +60,6 @@ jobs:
           echo "Default branch: $BRANCH"
           echo "name=$BRANCH" >> "$GITHUB_OUTPUT"
 
-      # 2. Ensure the release does not already exist.
       - name: Check release tag
         shell: bash
         env:
@@ -84,7 +80,6 @@ jobs:
             exit 1
           fi
 
-      # 3. Checkout the requested upstream source.
       - name: Checkout upstream release source
         uses: actions/checkout@v4
         with:
@@ -94,7 +89,6 @@ jobs:
           submodules: recursive
           path: upstream
 
-      # 4. Checkout custom resources, patches and the version counter.
       - name: Checkout custom files
         uses: actions/checkout@v4
         with:
@@ -109,7 +103,6 @@ jobs:
             starry/txt/versioncode.txt
           sparse-checkout-cone-mode: false
 
-      # 5. Restore custom XML resources.
       - name: Restore custom XML resources
         working-directory: upstream
         shell: bash
@@ -148,7 +141,6 @@ jobs:
 
           echo "Restored $XML_COUNT custom XML file(s)."
 
-      # 6. Restore custom image resources.
       - name: Restore custom image resources
         working-directory: upstream
         shell: bash
@@ -181,7 +173,6 @@ jobs:
 
           echo "Restored $IMAGE_COUNT custom image/resource file(s)."
 
-      # 7. Apply custom patches in filename order.
       - name: Apply custom patches
         working-directory: upstream
         shell: bash
@@ -216,7 +207,6 @@ jobs:
             echo "Applied ${#PATCHES[@]} custom patch(es)."
           fi
 
-      # 8. Read toolchain versions from the selected upstream workflow.
       - name: Read upstream toolchain versions
         id: toolchain
         working-directory: upstream
@@ -231,7 +221,6 @@ jobs:
             exit 1
           }
 
-          # Accept either KEY: value or KEY="value" formats.
           read_setting() {
             local key="$1"
             local value=""
@@ -269,7 +258,6 @@ jobs:
                 -z "$GO_VERSION" ||
                 -z "$NDK_VERSION" ]]; then
             echo "::error::Failed to parse Flutter, Go or NDK version from upstream build.yaml"
-            echo "Please check the format of the upstream workflow."
             exit 1
           fi
 
@@ -286,7 +274,6 @@ jobs:
           echo "go_version=$GO_VERSION" >> "$GITHUB_OUTPUT"
           echo "ndk_version=$NDK_VERSION" >> "$GITHUB_OUTPUT"
 
-      # 9. Allocate the next versionCode and update pubspec.yaml.
       - name: Allocate next versionCode
         id: app-version
         working-directory: upstream
@@ -303,28 +290,22 @@ jobs:
             exit 1
           fi
 
-          UPSTREAM_VERSION=$(sed -nE \
-            's/^version:[[:space:]]*([^+[:space:]]+).*/\1/p' \
-            pubspec.yaml | head -n 1)
+          # Derive the app version from the requested release tag.
+          VERSION_NAME="${RELEASE_TAG#v}"
 
-          if [[ -z "$UPSTREAM_VERSION" ]]; then
-            echo "::error::Could not read version from upstream pubspec.yaml"
-            exit 1
-          fi
-
-          if ! [[ "$UPSTREAM_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
-            echo "::error::Unsupported upstream version format: $UPSTREAM_VERSION"
+          if ! [[ "$VERSION_NAME" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-pre\.[1-9][0-9]*)?$ ]]; then
+            echo "::error::Unsupported release version format: $RELEASE_TAG"
             exit 1
           fi
 
           if [[ "$IS_PRERELEASE" == "true" ]]; then
-            if [[ ! "$UPSTREAM_VERSION" =~ -pre\.[1-9][0-9]*$ ]]; then
-              echo "::error::Expected prerelease version ending in -pre.N, got: $UPSTREAM_VERSION"
+            if [[ ! "$VERSION_NAME" =~ -pre\.[1-9][0-9]*$ ]]; then
+              echo "::error::Prerelease tag must end in -pre.N: $RELEASE_TAG"
               exit 1
             fi
           else
-            if [[ "$UPSTREAM_VERSION" == *-* ]]; then
-              echo "::error::Stable build received a prerelease version: $UPSTREAM_VERSION"
+            if [[ "$VERSION_NAME" == *-* ]]; then
+              echo "::error::Stable release cannot use a prerelease version: $RELEASE_TAG"
               exit 1
             fi
           fi
@@ -350,19 +331,17 @@ jobs:
             exit 1
           fi
 
-          if ! grep -qE '^version:[[:space:]]*' pubspec.yaml; then
+          grep -qE '^version:[[:space:]]*' pubspec.yaml || {
             echo "::error::Could not find version field in pubspec.yaml"
             exit 1
-          fi
-
-          VERSION_NAME="$UPSTREAM_VERSION"
+          }
 
           sed -i -E \
             "s/^version:.*/version: ${VERSION_NAME}+${VERSION_CODE}/" \
             pubspec.yaml
 
           echo "Version name: $VERSION_NAME"
-          echo "Previous versionCode: $PREVIOUS_CODE"
+          echo "Previous counter: $PREVIOUS_CODE"
           echo "Allocated versionCode: $VERSION_CODE"
 
           echo "EXPECTED_VERSION_NAME=$VERSION_NAME" >> "$GITHUB_ENV"
@@ -370,7 +349,6 @@ jobs:
           echo "version_code=$VERSION_CODE" >> "$GITHUB_OUTPUT"
           echo "version_name=$VERSION_NAME" >> "$GITHUB_OUTPUT"
 
-      # 10. Persist the counter before building.
       - name: Save allocated versionCode
         working-directory: custom-files
         shell: bash
@@ -402,7 +380,6 @@ jobs:
           git commit -m "chore: update versionCode to $NEW_VERSION_CODE"
           git push origin "HEAD:${DEFAULT_BRANCH}"
 
-      # 11. Set the custom Android application ID.
       - name: Set custom application ID
         working-directory: upstream
         shell: bash
@@ -418,7 +395,6 @@ jobs:
 
           grep -Fq 'applicationId = "com.follow.clash"' "$FILE" || {
             echo "::error::Expected upstream applicationId was not found."
-            echo "Check android/app/build.gradle.kts in the selected upstream tag."
             exit 1
           }
 
@@ -428,13 +404,11 @@ jobs:
 
           grep -F 'applicationId =' "$FILE"
 
-      # 12. Setup Rust and the Android target.
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: aarch64-linux-android
 
-      # 13. Setup Java.
       - name: Setup Java
         uses: actions/setup-java@v4
         with:
@@ -442,8 +416,6 @@ jobs:
           java-version: '17'
           cache: gradle
 
-      # 14. Install the Android NDK.
-      # This replaces the failed sdkmanager installation.
       - name: Setup Android NDK
         id: ndk
         uses: nttld/setup-ndk@v1
@@ -452,7 +424,6 @@ jobs:
           add-to-path: true
           link-to-sdk: true
 
-      # 15. Export the actual NDK path and configure the Rust linker.
       - name: Configure Android NDK environment
         shell: bash
         env:
@@ -485,14 +456,12 @@ jobs:
           echo "Using Android NDK: $NDK_PATH"
           cat "$HOME/.cargo/config.toml"
 
-      # 16. Setup Go.
       - name: Setup Go
         uses: actions/setup-go@v5
         with:
           go-version: ${{ steps.toolchain.outputs.go_version }}
           cache-dependency-path: upstream/core/go.sum
 
-      # 17. Setup Flutter.
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
@@ -500,12 +469,10 @@ jobs:
           flutter-version: ${{ steps.toolchain.outputs.flutter_version }}
           cache: true
 
-      # 18. Clear cached Pub credentials.
       - name: Clear Pub Cache Credentials
         shell: bash
         run: rm -f ~/.pub-cache/credentials.json || true
 
-      # 19. Configure Android signing.
       - name: Setup Android signing
         working-directory: upstream
         shell: bash
@@ -538,13 +505,11 @@ jobs:
             -storepass "$STORE_PASSWORD" \
             -alias "$KEY_ALIAS" >/dev/null
 
-      # 20. Clean the previous build output.
       - name: Clean Android build
         working-directory: upstream
         shell: bash
         run: flutter clean
 
-      # 21. Build only Android ARM64.
       - name: Build FlClash Android ARM64
         working-directory: upstream
         shell: bash
@@ -553,10 +518,17 @@ jobs:
         run: |
           set -euo pipefail
 
+          # Remove ABI-specific versionCode adjustment while keeping ARM64-only output.
+          if grep -Fq "flutterBuildArgs.add('split-per-abi');" setup.dart; then
+            sed -i "/flutterBuildArgs.add('split-per-abi');/d" setup.dart
+          else
+            echo "::error::Could not find split-per-abi setting in setup.dart"
+            exit 1
+          fi
+
           flutter pub get
           dart setup.dart android --arch arm64 --env stable -v
 
-      # 22. Verify APK package, version and signing certificate.
       - name: Verify APK version and signature
         working-directory: upstream
         shell: bash
@@ -663,7 +635,6 @@ jobs:
 
           echo "APK package, version and signing certificate verified."
 
-      # 23. Rename the APK to a predictable filename.
       - name: Rename APK
         working-directory: upstream
         shell: bash
@@ -686,7 +657,6 @@ jobs:
 
           echo "Final APK: $DEST"
 
-      # 24. Upload the APK as a workflow artifact.
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
@@ -695,7 +665,6 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
-      # 25. Publish the GitHub Release.
       - name: Publish GitHub Release
         working-directory: upstream
         env:
