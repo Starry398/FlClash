@@ -446,26 +446,42 @@ jobs:
           cache: gradle
 
       # 14. Install the upstream-required Android NDK.
-      - name: Setup Android NDK
+            - name: Setup Android NDK
+        id: ndk
+        uses: nttld/setup-ndk@v1
+        with:
+          ndk-version: ${{ env.NDK_VERSION }}
+          add-to-path: true
+          link-to-sdk: true
+
+      - name: Configure Android NDK environment
         shell: bash
         env:
-          NDK_VERSION: ${{ steps.toolchain.outputs.ndk_version }}
+          NDK_PATH: ${{ steps.ndk.outputs.ndk-path }}
         run: |
           set -euo pipefail
 
-          yes | "${ANDROID_SDK_ROOT}/cmdline-tools/latest/bin/sdkmanager" \
-            --install "ndk;${NDK_VERSION}" >/dev/null 2>&1 || true
-
-          NDK_PATH="${ANDROID_SDK_ROOT}/ndk/${NDK_VERSION}"
-
           test -d "$NDK_PATH" || {
-            echo "::error::Android NDK $NDK_VERSION was not installed"
+            echo "::error::Android NDK directory not found: $NDK_PATH"
             exit 1
           }
 
-          echo "ANDROID_NDK=$NDK_PATH" >> "$GITHUB_ENV"
           echo "ANDROID_NDK_HOME=$NDK_PATH" >> "$GITHUB_ENV"
-          echo "Using Android NDK: $NDK_PATH"
+          echo "ANDROID_NDK=$NDK_PATH" >> "$GITHUB_ENV"
+
+          mkdir -p "$HOME/.cargo"
+
+          cat > "$HOME/.cargo/config.toml" <<EOF
+          [target.aarch64-linux-android]
+          linker = "$NDK_PATH/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android26-clang"
+          EOF
+
+          test -x "$NDK_PATH/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android26-clang" || {
+            echo "::error::Android ARM64 Rust linker not found."
+            exit 1
+          }
+
+          cat "$HOME/.cargo/config.toml"
 
       # 15. Configure Cargo's Android linker.
       - name: Configure Cargo for Android
