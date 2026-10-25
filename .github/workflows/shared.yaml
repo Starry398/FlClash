@@ -247,7 +247,6 @@ jobs:
           GO_VERSION=$(read_setting GO_VERSION)
           NDK_VERSION=$(read_setting NDK_VERSION)
 
-          # Also support the common action input names in upstream YAML.
           if [[ -z "$FLUTTER_VERSION" ]]; then
             FLUTTER_VERSION=$(sed -nE \
               "s/^[[:space:]]*flutter-version:[[:space:]]*['\"]?([0-9]+\.[0-9]+\.[0-9]+).*/\\1/p" \
@@ -274,7 +273,6 @@ jobs:
             exit 1
           fi
 
-          # setup-go accepts x versions, but an explicit version is preferred.
           if [[ "$GO_VERSION" == *".x" ]]; then
             echo "::error::Upstream Go version is not pinned to a specific patch version: $GO_VERSION"
             exit 1
@@ -373,7 +371,6 @@ jobs:
           echo "version_name=$VERSION_NAME" >> "$GITHUB_OUTPUT"
 
       # 10. Persist the counter before building.
-      # A failed build still consumes its allocated versionCode.
       - name: Save allocated versionCode
         working-directory: custom-files
         shell: bash
@@ -445,15 +442,17 @@ jobs:
           java-version: '17'
           cache: gradle
 
-      # 14. Install the upstream-required Android NDK.
-            - name: Setup Android NDK
+      # 14. Install the Android NDK.
+      # This replaces the failed sdkmanager installation.
+      - name: Setup Android NDK
         id: ndk
         uses: nttld/setup-ndk@v1
         with:
-          ndk-version: ${{ env.NDK_VERSION }}
+          ndk-version: ${{ steps.toolchain.outputs.ndk_version }}
           add-to-path: true
           link-to-sdk: true
 
+      # 15. Export the actual NDK path and configure the Rust linker.
       - name: Configure Android NDK environment
         shell: bash
         env:
@@ -461,49 +460,30 @@ jobs:
         run: |
           set -euo pipefail
 
-          test -d "$NDK_PATH" || {
+          if [[ -z "$NDK_PATH" || ! -d "$NDK_PATH" ]]; then
             echo "::error::Android NDK directory not found: $NDK_PATH"
             exit 1
-          }
+          fi
 
           echo "ANDROID_NDK_HOME=$NDK_PATH" >> "$GITHUB_ENV"
           echo "ANDROID_NDK=$NDK_PATH" >> "$GITHUB_ENV"
+
+          LINKER="$NDK_PATH/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android26-clang"
+
+          test -x "$LINKER" || {
+            echo "::error::Android ARM64 linker not found: $LINKER"
+            exit 1
+          }
 
           mkdir -p "$HOME/.cargo"
 
           cat > "$HOME/.cargo/config.toml" <<EOF
           [target.aarch64-linux-android]
-          linker = "$NDK_PATH/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android26-clang"
-          EOF
-
-          test -x "$NDK_PATH/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android26-clang" || {
-            echo "::error::Android ARM64 Rust linker not found."
-            exit 1
-          }
-
-          cat "$HOME/.cargo/config.toml"
-
-      # 15. Configure Cargo's Android linker.
-      - name: Configure Cargo for Android
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          LINKER="${ANDROID_NDK}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android26-clang"
-
-          test -x "$LINKER" || {
-            echo "::error::Android linker not found: $LINKER"
-            exit 1
-          }
-
-          mkdir -p ~/.cargo
-
-          cat > ~/.cargo/config.toml <<EOF
-          [target.aarch64-linux-android]
           linker = "$LINKER"
           EOF
 
-          cat ~/.cargo/config.toml
+          echo "Using Android NDK: $NDK_PATH"
+          cat "$HOME/.cargo/config.toml"
 
       # 16. Setup Go.
       - name: Setup Go
