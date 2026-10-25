@@ -1,8 +1,96 @@
+diff --git a/lib/ui/floating_action.dart b/lib/ui/floating_action.dart
+new file mode 100644
+index 0000000..eaefdac
+--- /dev/null
++++ b/lib/ui/floating_action.dart
+@@ -0,0 +1,82 @@
++import 'package:fl_clash/ui/context.dart';
++import 'package:material_ui/material_ui.dart';
++
++/// Whether the page beside a corner button is being scrolled down, which is
++/// when the button leaves. [CommonScaffold] drives it.
++class FloatingActionScope extends InheritedNotifier<ValueNotifier<bool>> {
++  const FloatingActionScope({
++    super.key,
++    required ValueNotifier<bool> hidden,
++    required super.child,
++  }) : super(notifier: hidden);
++
++  static bool hiddenOf(BuildContext context) {
++    final scope = context
++        .dependOnInheritedWidgetOfExactType<FloatingActionScope>();
++    return scope?.notifier?.value ?? false;
++  }
++}
++
++/// Brings a corner button in and out. It rises and grows into place, with a
++/// small overshoot, and sinks and fades away. With [enter] it also waits a
++/// beat after the page opens before it first appears.
++class FloatingActionReveal extends StatefulWidget {
++  const FloatingActionReveal({
++    super.key,
++    required this.child,
++    this.visible = true,
++    this.enter = false,
++  });
++
++  final Widget child;
++  final bool visible;
++  final bool enter;
++
++  @override
++  State<FloatingActionReveal> createState() => _FloatingActionRevealState();
++}
++
++class _FloatingActionRevealState extends State<FloatingActionReveal> {
++  static const _enterDelay = Duration(milliseconds: 260);
++
++  late bool _entered = !widget.enter;
++
++  @override
++  void initState() {
++    super.initState();
++    if (!_entered) {
++      Future.delayed(_enterDelay, () {
++        if (mounted) {
++          setState(() => _entered = true);
++        }
++      });
++    }
++  }
++
++  @override
++  Widget build(BuildContext context) {
++    final show = _entered && widget.visible;
++    final duration = context.motionDuration(
++      Duration(milliseconds: show ? 420 : 220),
++    );
++    return IgnorePointer(
++      ignoring: !show,
++      child: AnimatedSlide(
++        offset: show ? Offset.zero : const Offset(0, 0.25),
++        duration: duration,
++        curve: show ? Curves.easeOutCubic : Curves.easeInCubic,
++        child: AnimatedScale(
++          scale: show ? 1 : 0.7,
++          duration: duration,
++          curve: show ? Curves.easeOutBack : Curves.easeInCubic,
++          child: AnimatedOpacity(
++            opacity: show ? 1 : 0,
++            duration: duration,
++            curve: show ? Curves.easeOut : Curves.easeIn,
++            child: widget.child,
++          ),
++        ),
++      ),
++    );
++  }
++}
 diff --git a/lib/ui/inherited.dart b/lib/ui/inherited.dart
-index 1feadb4..863a51d 100644
+index 1feadb4..a524a38 100644
 --- a/lib/ui/inherited.dart
 +++ b/lib/ui/inherited.dart
-@@ -31,6 +31,11 @@ class BottomInsetScope extends InheritedWidget {
+@@ -31,6 +31,15 @@ class BottomInsetScope extends InheritedWidget {
    static const double dockedSearchInset =
        dockedSearchMargin + dockedSearchHeight;
  
@@ -11,14 +99,26 @@ index 1feadb4..863a51d 100644
 +  static const double floatingActionInset =
 +      kFloatingActionButtonMargin + 56 + kFloatingActionButtonMargin;
 +
++  /// How far a floating action button sits above its standard margin, so it
++  /// clears the bar below and the last row it floats over.
++  static const double floatingActionLift = 12;
++
    final double inset;
  
    const BottomInsetScope({
 diff --git a/lib/ui/scaffold.dart b/lib/ui/scaffold.dart
-index 9ae9c66..39f2073 100644
+index 9ae9c66..8c51e49 100644
 --- a/lib/ui/scaffold.dart
 +++ b/lib/ui/scaffold.dart
-@@ -52,6 +52,10 @@ class CommonScaffold extends StatefulWidget {
+@@ -3,6 +3,7 @@ import 'dart:ui' show ImageFilter, lerpDouble;
+ 
+ import 'package:fl_clash/common/iterable.dart';
+ import 'package:fl_clash/ui/context.dart';
++import 'package:fl_clash/ui/floating_action.dart';
+ import 'package:fl_clash/ui/icons/icons.dart';
+ import 'package:fl_clash/ui/keyboard.dart';
+ import 'package:fl_clash/ui/l10n.dart';
+@@ -52,6 +53,10 @@ class CommonScaffold extends StatefulWidget {
  
    final IconButtonData? primaryAction;
  
@@ -29,7 +129,7 @@ index 9ae9c66..39f2073 100644
    /// Folded into the overflow menu once the bar would hold more than three
    /// buttons, as [primaryAction] and [menuItems] are; [actions] never fold.
    final List<IconButtonData> iconActions;
-@@ -92,6 +96,7 @@ class CommonScaffold extends StatefulWidget {
+@@ -92,6 +97,7 @@ class CommonScaffold extends StatefulWidget {
      this.searchInBar = false,
      this.selectionActions = const [],
      this.primaryAction,
@@ -37,7 +137,44 @@ index 9ae9c66..39f2073 100644
      this.iconActions = const [],
      this.menuItems = const [],
      this.confirmationAction,
-@@ -946,9 +951,16 @@ class CommonScaffoldState extends State<CommonScaffold>
+@@ -108,6 +114,7 @@ class CommonScaffoldState extends State<CommonScaffold>
+     with SingleTickerProviderStateMixin {
+   late final ValueNotifier<AppBarState> _appBarState;
+   final ValueNotifier<bool> _loadingNotifier = ValueNotifier(false);
++  final ValueNotifier<bool> _fabHidden = ValueNotifier(false);
+   final ValueNotifier<List<String>> _keywordsNotifier = ValueNotifier([]);
+   final _textController = TextEditingController();
+   final _searchFocusNode = FocusNode();
+@@ -344,10 +351,28 @@ class CommonScaffoldState extends State<CommonScaffold>
+     _searchOrigin.dispose();
+     _searchCovered.dispose();
+     _loadingNotifier.dispose();
++    _fabHidden.dispose();
+     _keywordsNotifier.dispose();
+     super.dispose();
+   }
+ 
++  /// A corner button leaves while the page scrolls down and returns when it
++  /// scrolls up or reaches the top.
++  bool _handleFabScroll(ScrollNotification notification) {
++    if (notification.metrics.axis != Axis.vertical ||
++        notification is! ScrollUpdateNotification) {
++      return false;
++    }
++    final delta = notification.scrollDelta ?? 0;
++    final metrics = notification.metrics;
++    if (metrics.pixels <= metrics.minScrollExtent + 8 || delta < -2) {
++      _fabHidden.value = false;
++    } else if (delta > 2) {
++      _fabHidden.value = true;
++    }
++    return false;
++  }
++
+   void addKeyword(String keyword) {
+     final isContains = _keywordsNotifier.value.contains(keyword);
+     if (isContains) return;
+@@ -946,35 +971,63 @@ class CommonScaffoldState extends State<CommonScaffold>
        ),
      );
      final appBar = _buildAppBar(backAction, form);
@@ -52,20 +189,75 @@ index 9ae9c66..39f2073 100644
          ? BottomInsetScope(
 -            inset: bottomInset + BottomInsetScope.dockedSearchInset,
 +            inset:
-+                lift + (fab == null ? 0 : BottomInsetScope.floatingActionInset),
++                lift +
++                (fab == null
++                    ? 0
++                    : BottomInsetScope.floatingActionInset +
++                          BottomInsetScope.floatingActionLift),
              child: body,
            )
          : body;
-@@ -958,6 +970,9 @@ class CommonScaffoldState extends State<CommonScaffold>
-         child: Scaffold(
-           appBar: appBar,
-           extendBodyBehindAppBar: barFloats,
-+          floatingActionButton: fab == null
-+              ? null
-+              : Padding(padding: EdgeInsets.only(bottom: lift), child: fab),
-           body: _BodyScope(
-             child: docked == null
-                 ? content
+     if (!isCompact) {
+       final docked = form.dockedSearch;
++      final scrolled = fab == null
++          ? content
++          : NotificationListener<ScrollNotification>(
++              onNotification: _handleFabScroll,
++              child: content,
++            );
+       return AppBarInsetScope(
+-        child: Scaffold(
+-          appBar: appBar,
+-          extendBodyBehindAppBar: barFloats,
+-          body: _BodyScope(
+-            child: docked == null
+-                ? content
+-                : Stack(
+-                    fit: StackFit.expand,
+-                    children: [
+-                      content,
+-                      if (!_sorting)
+-                        Align(
+-                          alignment: Alignment.bottomCenter,
+-                          child: _buildDockedSearch(docked),
+-                        ),
+-                    ],
++        child: FloatingActionScope(
++          hidden: _fabHidden,
++          child: Scaffold(
++            appBar: appBar,
++            extendBodyBehindAppBar: barFloats,
++            floatingActionButton: fab == null
++                ? null
++                : Padding(
++                    padding: EdgeInsets.only(
++                      bottom: lift + BottomInsetScope.floatingActionLift,
++                    ),
++                    child: fab,
+                   ),
++            body: _BodyScope(
++              child: docked == null
++                  ? scrolled
++                  : Stack(
++                      fit: StackFit.expand,
++                      children: [
++                        scrolled,
++                        if (!_sorting)
++                          Align(
++                            alignment: Alignment.bottomCenter,
++                            child: _buildDockedSearch(docked),
++                          ),
++                      ],
++                    ),
++            ),
++            resizeToAvoidBottomInset: widget.resizeToAvoidBottomInset,
++            backgroundColor: widget.backgroundColor,
+           ),
+-          resizeToAvoidBottomInset: widget.resizeToAvoidBottomInset,
+-          backgroundColor: widget.backgroundColor,
+         ),
+       );
+     }
 diff --git a/lib/views/dashboard/dashboard.dart b/lib/views/dashboard/dashboard.dart
 index 8842d6b..ab65712 100644
 --- a/lib/views/dashboard/dashboard.dart
@@ -88,26 +280,32 @@ index 8842d6b..ab65712 100644
                glyph: AppGlyphs.check,
 diff --git a/lib/views/dashboard/widgets/start_fab.dart b/lib/views/dashboard/widgets/start_fab.dart
 new file mode 100644
-index 0000000..c79cd06
+index 0000000..b05740a
 --- /dev/null
 +++ b/lib/views/dashboard/widgets/start_fab.dart
-@@ -0,0 +1,61 @@
+@@ -0,0 +1,122 @@
 +import 'dart:ui' show FontFeature;
 +
 +import 'package:fl_clash/common/common.dart';
 +import 'package:fl_clash/providers/providers.dart';
++import 'package:fl_clash/ui/floating_action.dart';
 +import 'package:fl_clash/ui/icons/icons.dart';
++import 'package:fl_clash/ui/shape.dart';
 +import 'package:fl_clash/widgets/widgets.dart';
 +import 'package:flutter_riverpod/flutter_riverpod.dart';
 +import 'package:material_ui/material_ui.dart';
 +
 +/// Starts and stops the tunnel from the corner of the page. Stopped, it is a
-+/// plain play button; running, it widens into a pause button that carries the
-+/// run time, the way the delay test button on the proxies page is shaped.
++/// plain play button; running, it widens to a pause button that carries the
++/// run time. The width, the icon and the time all move together when it
++/// starts or stops. It rises into place when the page opens and leaves while
++/// the page scrolls down.
 +class StartFab extends ConsumerWidget {
 +  const StartFab({super.key});
 +
++  static const _size = 56.0;
 +  static const _morphDuration = Duration(milliseconds: 360);
++  static const _widenDuration = Duration(milliseconds: 340);
 +
 +  @override
 +  Widget build(BuildContext context, WidgetRef ref) {
@@ -122,42 +320,105 @@ index 0000000..c79cd06
 +    final ink = hasProfile
 +        ? colorScheme.onPrimary
 +        : colorScheme.onSurface.withValues(alpha: 0.38);
-+    return FloatingActionButton.extended(
-+      heroTag: null,
-+      isExtended: isStart,
-+      tooltip: suspended
-+          ? appLocalizations.suspended
-+          : isStart
-+          ? appLocalizations.stop
-+          : appLocalizations.start,
-+      backgroundColor: hasProfile
++    final labelStyle = (Theme.of(context).textTheme.labelLarge ?? const TextStyle())
++        .copyWith(
++          color: ink,
++          fontFeatures: const [FontFeature.tabularFigures()],
++        );
++    final icon = suspended
++        ? GlyphIcon(AppGlyphs.wifiOff, color: ink, fill: 1)
++        : TweenAnimationBuilder<double>(
++            tween: Tween(end: isStart ? 1 : 0),
++            duration: context.motionDuration(_morphDuration),
++            curve: Curves.easeOutBack,
++            builder: (_, progress, _) =>
++                GlyphIcon(AppGlyphs.playPause(progress), color: ink, fill: 1),
++          );
++    final button = Material(
++      color: hasProfile
 +          ? colorScheme.primary
 +          : colorScheme.onSurface.withValues(alpha: 0.12),
-+      foregroundColor: ink,
-+      onPressed: hasProfile
-+          ? ref.read(commonActionProvider.notifier).toggleRunning
-+          : null,
-+      icon: suspended
-+          ? GlyphIcon(AppGlyphs.wifiOff, color: ink, fill: 1)
-+          : TweenAnimationBuilder<double>(
-+              tween: Tween(end: isStart ? 1 : 0),
-+              duration: context.motionDuration(_morphDuration),
-+              curve: Curves.easeOutBack,
-+              builder: (_, progress, _) =>
-+                  GlyphIcon(AppGlyphs.playPause(progress), color: ink, fill: 1),
++      shape: AppShape.md,
++      elevation: hasProfile ? 6 : 0,
++      shadowColor: colorScheme.shadow,
++      clipBehavior: Clip.antiAlias,
++      child: Tooltip(
++        message: suspended
++            ? appLocalizations.suspended
++            : isStart
++            ? appLocalizations.stop
++            : appLocalizations.start,
++        child: InkWell(
++          onTap: hasProfile
++              ? ref.read(commonActionProvider.notifier).toggleRunning
++              : null,
++          child: ConstrainedBox(
++            constraints: const BoxConstraints(
++              minWidth: _size,
++              minHeight: _size,
 +            ),
-+      label: Text(
-+        getTimeText(runTime),
-+        style: const TextStyle(fontFeatures: [FontFeature.tabularFigures()]),
++            child: Padding(
++              padding: const EdgeInsets.symmetric(horizontal: 16),
++              child: Row(
++                mainAxisSize: MainAxisSize.min,
++                mainAxisAlignment: MainAxisAlignment.center,
++                children: [
++                  icon,
++                  // The time grows out of the icon as the button widens, and
++                  // folds back into it as the button narrows.
++                  AnimatedSwitcher(
++                    duration: context.motionDuration(_widenDuration),
++                    switchInCurve: Curves.easeOutCubic,
++                    switchOutCurve: Curves.easeInCubic,
++                    transitionBuilder: (child, animation) => SizeTransition(
++                      axis: Axis.horizontal,
++                      axisAlignment: -1,
++                      sizeFactor: animation,
++                      child: FadeTransition(opacity: animation, child: child),
++                    ),
++                    child: isStart
++                        ? Padding(
++                            key: const ValueKey('time'),
++                            padding: const EdgeInsetsDirectional.only(
++                              start: 8,
++                              end: 4,
++                            ),
++                            child: Text(
++                              getTimeText(runTime),
++                              maxLines: 1,
++                              softWrap: false,
++                              style: labelStyle,
++                            ),
++                          )
++                        : const SizedBox.shrink(key: ValueKey('none')),
++                  ),
++                ],
++              ),
++            ),
++          ),
++        ),
 +      ),
++    );
++    return FloatingActionReveal(
++      enter: true,
++      visible: !FloatingActionScope.hiddenOf(context),
++      child: button,
 +    );
 +  }
 +}
 diff --git a/lib/views/proxies/proxies.dart b/lib/views/proxies/proxies.dart
-index f2426f4..681f4d2 100644
+index f2426f4..1566f3f 100644
 --- a/lib/views/proxies/proxies.dart
 +++ b/lib/views/proxies/proxies.dart
-@@ -113,16 +113,42 @@ class _ProxiesViewState extends ConsumerState<ProxiesView> {
+@@ -2,6 +2,7 @@ import 'package:fl_clash/common/common.dart';
+ import 'package:fl_clash/enum/enum.dart';
+ import 'package:fl_clash/models/models.dart';
+ import 'package:fl_clash/providers/providers.dart';
++import 'package:fl_clash/ui/floating_action.dart';
+ import 'package:fl_clash/ui/icons/icons.dart';
+ import 'package:fl_clash/views/proxies/list.dart';
+ import 'package:fl_clash/widgets/widgets.dart';
+@@ -113,16 +114,49 @@ class _ProxiesViewState extends ConsumerState<ProxiesView> {
      ];
    }
  
@@ -172,19 +433,26 @@ index f2426f4..681f4d2 100644
 +    }
 +    final isDelayTesting = ref.watch(currentGroupDelayTestingProvider);
 +    final label = context.appLocalizations.delayTest;
-+    return FloatingActionButton.extended(
-+      heroTag: null,
-+      tooltip: label,
-+      onPressed: isDelayTesting ? null : _delayTestCurrentGroup,
-+      icon: isDelayTesting
-+          ? SizedBox.square(
-+              dimension: 24,
-+              child: CommonCircleLoading(color: context.colorScheme.onPrimary),
-+            )
-+          : const GlyphIcon(AppGlyphs.bolt, fill: 1),
-+      label: Text(label),
-+      backgroundColor: context.colorScheme.primary,
-+      foregroundColor: context.colorScheme.onPrimary,
++    return Builder(
++      builder: (context) => FloatingActionReveal(
++        visible: !FloatingActionScope.hiddenOf(context),
++        child: FloatingActionButton.extended(
++          heroTag: null,
++          tooltip: label,
++          onPressed: isDelayTesting ? null : _delayTestCurrentGroup,
++          icon: isDelayTesting
++              ? SizedBox.square(
++                  dimension: 24,
++                  child: CommonCircleLoading(
++                    color: context.colorScheme.onPrimary,
++                  ),
++                )
++              : const GlyphIcon(AppGlyphs.bolt, fill: 1),
++          label: Text(label),
++          backgroundColor: context.colorScheme.primary,
++          foregroundColor: context.colorScheme.onPrimary,
++        ),
++      ),
 +    );
 +  }
 +
@@ -204,7 +472,7 @@ index f2426f4..681f4d2 100644
        tooltip: context.appLocalizations.delayTest,
        isLoading: isDelayTesting,
      );
-@@ -160,6 +186,7 @@ class _ProxiesViewState extends ConsumerState<ProxiesView> {
+@@ -160,6 +194,7 @@ class _ProxiesViewState extends ConsumerState<ProxiesView> {
        isLoading: isLoading,
        resizeToAvoidBottomInset: false,
        primaryAction: primaryAction,
@@ -212,3 +480,4 @@ index f2426f4..681f4d2 100644
        searchActions: [?primaryAction],
        iconActions: [
          if (_isTab && !picker)
+
