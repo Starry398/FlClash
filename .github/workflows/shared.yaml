@@ -1,0 +1,743 @@
+name: Shared
+
+on:
+  workflow_call:
+    inputs:
+      source_tag:
+        description: Upstream FlClash tag to build
+        required: true
+        type: string
+      release_tag:
+        description: GitHub Release tag
+        required: true
+        type: string
+      release_title:
+        description: GitHub Release title
+        required: true
+        type: string
+      prerelease:
+        description: Whether this is a prerelease
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: write
+  actions: read
+
+# Stable and prerelease builds share one versionCode counter.
+# Keep this group different from the caller workflows' concurrency groups.
+concurrency:
+  group: flclash-versioncode-${{ github.repository }}
+  cancel-in-progress: false
+
+env:
+  GRADLE_OPTS: -Dorg.gradle.vfs.watch=false
+  FLUTTER_VERSION: 3.47.6
+  GO_VERSION: 1.27.1
+  NDK_VERSION: r28c
+
+jobs:
+  build:
+    name: Build FlClash Android ARM64
+    runs-on: ubuntu-24.04
+
+    steps:
+      # 1. Determine this repository's default branch.
+      - name: Get repository default branch
+        id: default-branch
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+
+          BRANCH=$(gh api "repos/${REPOSITORY}" --jq '.default_branch')
+
+          if [[ -z "$BRANCH" ]]; then
+            echo "::error::Could not determine repository default branch"
+            exit 1
+          fi
+
+          echo "Default branch: $BRANCH"
+          echo "name=$BRANCH" >> "$GITHUB_OUTPUT"
+
+      # 2. Ensure the release does not already exist.
+      - name: Check release tag
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+
+          if [[ -z "$RELEASE_TAG" ]]; then
+            echo "::error::Release tag must not be empty"
+            exit 1
+          fi
+
+          if gh release view "$RELEASE_TAG" \
+            --repo "$REPOSITORY" >/dev/null 2>&1; then
+            echo "::error::Release already exists: $RELEASE_TAG"
+            exit 1
+          fi
+
+      # 3. Checkout the requested upstream source.
+      - name: Checkout upstream release source
+        uses: actions/checkout@v4
+        with:
+          repository: chen08209/FlClash
+          ref: ${{ inputs.source_tag }}
+          fetch-depth: 0
+          submodules: recursive
+          path: upstream
+
+      # 4. Checkout custom resources, patches and the version counter.
+      - name: Checkout custom files
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository }}
+          ref: ${{ steps.default-branch.outputs.name }}
+          token: ${{ github.token }}
+          path: custom-files
+          sparse-checkout: |
+            starry/xml
+            starry/images
+            starry/patch
+            starry/txt/versioncode.txt
+          sparse-checkout-cone-mode: false
+
+      # 5. Restore custom XML resources.
+      - name: Restore custom XML resources
+        working-directory: upstream
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          SOURCE="../custom-files/starry/xml"
+          TARGET="android/app/src/main/res/drawable"
+
+          test -d "$SOURCE" || {
+            echo "::error::Custom XML directory not found: $SOURCE"
+            exit 1
+          }
+
+          test -d "$TARGET" || {
+            echo "::error::Upstream drawable directory not found: $TARGET"
+            exit 1
+          }
+
+          XML_COUNT=0
+
+          while IFS= read -r -d '' file; do
+            filename=$(basename "$file")
+
+            if ! [[ "$filename" =~ ^[a-z0-9_]+\.xml$ ]]; then
+              echo "::error::Invalid Android resource filename: $filename"
+              exit 1
+            fi
+
+            cp -f "$file" "$TARGET/$filename"
+            echo "Restored XML: $filename"
+            XML_COUNT=$((XML_COUNT + 1))
+          done < <(
+            find "$SOURCE" -maxdepth 1 -type f -name '*.xml' -print0
+          )
+
+          echo "Restored $XML_COUNT custom XML file(s)."
+
+      # 6. Restore custom image resources.
+      - name: Restore custom image resources
+        working-directory: upstream
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          SOURCE="../custom-files/starry/images"
+          TARGET="assets/images"
+
+          test -d "$SOURCE" || {
+            echo "::error::Custom images directory not found: $SOURCE"
+            exit 1
+          }
+
+          test -d "$TARGET" || {
+            echo "::error::Upstream images directory not found: $TARGET"
+            exit 1
+          }
+
+          IMAGE_COUNT=0
+
+          while IFS= read -r -d '' file; do
+            filename=$(basename "$file")
+            cp -f "$file" "$TARGET/$filename"
+            echo "Restored image/resource: $filename"
+            IMAGE_COUNT=$((IMAGE_COUNT + 1))
+          done < <(
+            find "$SOURCE" -maxdepth 1 -type f -print0
+          )
+
+          echo "Restored $IMAGE_COUNT custom image/resource file(s)."
+
+      # 7. Apply custom patches in filename order.
+      - name: Apply custom patches
+        working-directory: upstream
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          PATCH_DIR="../custom-files/starry/patch"
+
+          test -d "$PATCH_DIR" || {
+            echo "::error::Patch directory not found: $PATCH_DIR"
+            exit 1
+          }
+
+          shopt -s nullglob
+          PATCHES=("$PATCH_DIR"/*.patch)
+
+          if (( ${#PATCHES[@]} == 0 )); then
+            echo "No .patch files found. Skipping custom patches."
+          else
+            for patch in "${PATCHES[@]}"; do
+              echo "Checking patch: $(basename "$patch")"
+
+              if ! git apply --check "$patch"; then
+                echo "::error::Patch cannot be applied: $(basename "$patch")"
+                exit 1
+              fi
+
+              git apply "$patch"
+              echo "Applied patch: $(basename "$patch")"
+            done
+
+            echo "Applied ${#PATCHES[@]} custom patch(es)."
+          fi
+
+      # 8. Read toolchain versions from the selected upstream workflow.
+      - name: Read upstream toolchain versions
+        id: toolchain
+        working-directory: upstream
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          FILE=".github/workflows/build.yaml"
+
+          test -f "$FILE" || {
+            echo "::error::Upstream build workflow not found: $FILE"
+            exit 1
+          }
+
+          # Accept either KEY: value or KEY="value" formats.
+          read_setting() {
+            local key="$1"
+            local value=""
+
+            value=$(sed -nE \
+              "s/^[[:space:]]*${key}:[[:space:]]*[\"']?([^\"'#[:space:]]+).*/\\1/p; s/^[[:space:]]*${key}=[\"']([^\"']+)[\"'].*/\\1/p" \
+              "$FILE" | head -n 1 || true)
+
+            printf '%s' "$value"
+          }
+
+          FLUTTER_VERSION=$(read_setting FLUTTER_VERSION)
+          GO_VERSION=$(read_setting GO_VERSION)
+          NDK_VERSION=$(read_setting NDK_VERSION)
+
+          # Also support the common action input names in upstream YAML.
+          if [[ -z "$FLUTTER_VERSION" ]]; then
+            FLUTTER_VERSION=$(sed -nE \
+              "s/^[[:space:]]*flutter-version:[[:space:]]*['\"]?([0-9]+\.[0-9]+\.[0-9]+).*/\\1/p" \
+              "$FILE" | tail -n 1)
+          fi
+
+          if [[ -z "$GO_VERSION" ]]; then
+            GO_VERSION=$(sed -nE \
+              "s/^[[:space:]]*go-version:[[:space:]]*['\"]?([0-9]+\.[0-9]+(\.[0-9]+|\.x)?).*/\\1/p" \
+              "$FILE" | tail -n 1)
+          fi
+
+          if [[ -z "$NDK_VERSION" ]]; then
+            NDK_VERSION=$(sed -nE \
+              "s/^[[:space:]]*NDK_VERSION=[\"']([^\"']+).*/\\1/p" \
+              "$FILE" | head -n 1)
+          fi
+
+          if [[ -z "$FLUTTER_VERSION" ||
+                -z "$GO_VERSION" ||
+                -z "$NDK_VERSION" ]]; then
+            echo "::error::Failed to parse Flutter, Go or NDK version from upstream build.yaml"
+            echo "Please check the format of the upstream workflow."
+            exit 1
+          fi
+
+          # setup-go accepts x versions, but an explicit version is preferred.
+          if [[ "$GO_VERSION" == *".x" ]]; then
+            echo "::error::Upstream Go version is not pinned to a specific patch version: $GO_VERSION"
+            exit 1
+          fi
+
+          echo "Flutter version: $FLUTTER_VERSION"
+          echo "Go version: $GO_VERSION"
+          echo "NDK version: $NDK_VERSION"
+
+          echo "flutter_version=$FLUTTER_VERSION" >> "$GITHUB_OUTPUT"
+          echo "go_version=$GO_VERSION" >> "$GITHUB_OUTPUT"
+          echo "ndk_version=$NDK_VERSION" >> "$GITHUB_OUTPUT"
+
+      # 9. Allocate the next versionCode and update pubspec.yaml.
+      - name: Allocate next versionCode
+        id: app-version
+        working-directory: upstream
+        shell: bash
+        env:
+          SOURCE_TAG: ${{ inputs.source_tag }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          IS_PRERELEASE: ${{ inputs.prerelease }}
+        run: |
+          set -euo pipefail
+
+          if [[ -z "$SOURCE_TAG" || -z "$RELEASE_TAG" ]]; then
+            echo "::error::Source tag and release tag must not be empty"
+            exit 1
+          fi
+
+          UPSTREAM_VERSION=$(sed -nE \
+            's/^version:[[:space:]]*([^+[:space:]]+).*/\1/p' \
+            pubspec.yaml | head -n 1)
+
+          if [[ -z "$UPSTREAM_VERSION" ]]; then
+            echo "::error::Could not read version from upstream pubspec.yaml"
+            exit 1
+          fi
+
+          if ! [[ "$UPSTREAM_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "::error::Unsupported upstream version format: $UPSTREAM_VERSION"
+            exit 1
+          fi
+
+          if [[ "$IS_PRERELEASE" == "true" ]]; then
+            if [[ ! "$UPSTREAM_VERSION" =~ -pre\.[1-9][0-9]*$ ]]; then
+              echo "::error::Expected prerelease version ending in -pre.N, got: $UPSTREAM_VERSION"
+              exit 1
+            fi
+          else
+            if [[ "$UPSTREAM_VERSION" == *-* ]]; then
+              echo "::error::Stable build received a prerelease version: $UPSTREAM_VERSION"
+              exit 1
+            fi
+          fi
+
+          COUNTER="../custom-files/starry/txt/versioncode.txt"
+
+          test -f "$COUNTER" || {
+            echo "::error::Version counter not found: $COUNTER"
+            exit 1
+          }
+
+          PREVIOUS_CODE=$(tr -d '[:space:]' < "$COUNTER")
+
+          if ! [[ "$PREVIOUS_CODE" =~ ^[0-9]+$ ]]; then
+            echo "::error::Invalid versionCode counter: $PREVIOUS_CODE"
+            exit 1
+          fi
+
+          VERSION_CODE=$((10#$PREVIOUS_CODE + 1))
+
+          if (( VERSION_CODE < 1 || VERSION_CODE > 2100000000 )); then
+            echo "::error::versionCode is outside the supported range: $VERSION_CODE"
+            exit 1
+          fi
+
+          if ! grep -qE '^version:[[:space:]]*' pubspec.yaml; then
+            echo "::error::Could not find version field in pubspec.yaml"
+            exit 1
+          fi
+
+          VERSION_NAME="$UPSTREAM_VERSION"
+
+          sed -i -E \
+            "s/^version:.*/version: ${VERSION_NAME}+${VERSION_CODE}/" \
+            pubspec.yaml
+
+          echo "Version name: $VERSION_NAME"
+          echo "Previous versionCode: $PREVIOUS_CODE"
+          echo "Allocated versionCode: $VERSION_CODE"
+
+          echo "EXPECTED_VERSION_NAME=$VERSION_NAME" >> "$GITHUB_ENV"
+          echo "EXPECTED_VERSION_CODE=$VERSION_CODE" >> "$GITHUB_ENV"
+          echo "version_code=$VERSION_CODE" >> "$GITHUB_OUTPUT"
+          echo "version_name=$VERSION_NAME" >> "$GITHUB_OUTPUT"
+
+      # 10. Persist the counter before building.
+      # A failed build still consumes its allocated versionCode.
+      - name: Save allocated versionCode
+        working-directory: custom-files
+        shell: bash
+        env:
+          NEW_VERSION_CODE: ${{ steps.app-version.outputs.version_code }}
+          DEFAULT_BRANCH: ${{ steps.default-branch.outputs.name }}
+        run: |
+          set -euo pipefail
+
+          FILE="starry/txt/versioncode.txt"
+
+          test -f "$FILE" || {
+            echo "::error::Version counter not found: $FILE"
+            exit 1
+          }
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          printf '%s\n' "$NEW_VERSION_CODE" > "$FILE"
+
+          git add "$FILE"
+
+          if git diff --cached --quiet; then
+            echo "::error::Counter file did not change"
+            exit 1
+          fi
+
+          git commit -m "chore: update versionCode to $NEW_VERSION_CODE"
+          git push origin "HEAD:${DEFAULT_BRANCH}"
+
+      # 11. Set the custom Android application ID.
+      - name: Set custom application ID
+        working-directory: upstream
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          FILE="android/app/build.gradle.kts"
+
+          test -f "$FILE" || {
+            echo "::error::Gradle file not found: $FILE"
+            exit 1
+          }
+
+          grep -Fq 'applicationId = "com.follow.clash"' "$FILE" || {
+            echo "::error::Expected upstream applicationId was not found."
+            echo "Check android/app/build.gradle.kts in the selected upstream tag."
+            exit 1
+          }
+
+          sed -i \
+            's/applicationId = "com.follow.clash"/applicationId = "com.follow.clash.starry"/' \
+            "$FILE"
+
+          grep -F 'applicationId =' "$FILE"
+
+      # 12. Setup Rust and the Android target.
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
+
+      # 13. Setup Java.
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: gradle
+
+      # 14. Install the upstream-required Android NDK.
+      - name: Setup Android NDK
+        shell: bash
+        env:
+          NDK_VERSION: ${{ steps.toolchain.outputs.ndk_version }}
+        run: |
+          set -euo pipefail
+
+          yes | "${ANDROID_SDK_ROOT}/cmdline-tools/latest/bin/sdkmanager" \
+            --install "ndk;${NDK_VERSION}" >/dev/null 2>&1 || true
+
+          NDK_PATH="${ANDROID_SDK_ROOT}/ndk/${NDK_VERSION}"
+
+          test -d "$NDK_PATH" || {
+            echo "::error::Android NDK $NDK_VERSION was not installed"
+            exit 1
+          }
+
+          echo "ANDROID_NDK=$NDK_PATH" >> "$GITHUB_ENV"
+          echo "ANDROID_NDK_HOME=$NDK_PATH" >> "$GITHUB_ENV"
+          echo "Using Android NDK: $NDK_PATH"
+
+      # 15. Configure Cargo's Android linker.
+      - name: Configure Cargo for Android
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          LINKER="${ANDROID_NDK}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android26-clang"
+
+          test -x "$LINKER" || {
+            echo "::error::Android linker not found: $LINKER"
+            exit 1
+          }
+
+          mkdir -p ~/.cargo
+
+          cat > ~/.cargo/config.toml <<EOF
+          [target.aarch64-linux-android]
+          linker = "$LINKER"
+          EOF
+
+          cat ~/.cargo/config.toml
+
+      # 16. Setup Go.
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ steps.toolchain.outputs.go_version }}
+          cache-dependency-path: upstream/core/go.sum
+
+      # 17. Setup Flutter.
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: ${{ steps.toolchain.outputs.flutter_version }}
+          cache: true
+
+      # 18. Clear cached Pub credentials.
+      - name: Clear Pub Cache Credentials
+        shell: bash
+        run: rm -f ~/.pub-cache/credentials.json || true
+
+      # 19. Configure Android signing.
+      - name: Setup Android signing
+        working-directory: upstream
+        shell: bash
+        env:
+          KEYSTORE: ${{ secrets.KEYSTORE }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          STORE_PASSWORD: ${{ secrets.STORE_PASSWORD }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+
+          for name in KEYSTORE KEY_ALIAS STORE_PASSWORD KEY_PASSWORD; do
+            if [[ -z "${!name:-}" ]]; then
+              echo "::error::Missing GitHub Actions secret: $name"
+              exit 1
+            fi
+          done
+
+          printf '%s' "$KEYSTORE" | base64 --decode > android/app/keystore.jks
+
+          {
+            echo "storeFile=keystore.jks"
+            echo "keyAlias=$KEY_ALIAS"
+            echo "storePassword=$STORE_PASSWORD"
+            echo "keyPassword=$KEY_PASSWORD"
+          } >> android/local.properties
+
+          keytool -list \
+            -keystore android/app/keystore.jks \
+            -storepass "$STORE_PASSWORD" \
+            -alias "$KEY_ALIAS" >/dev/null
+
+      # 20. Clean the previous build output.
+      - name: Clean Android build
+        working-directory: upstream
+        shell: bash
+        run: flutter clean
+
+      # 21. Build only Android ARM64.
+      - name: Build FlClash Android ARM64
+        working-directory: upstream
+        shell: bash
+        env:
+          SENTRY_DSN: ''
+        run: |
+          set -euo pipefail
+
+          flutter pub get
+          dart setup.dart android --arch arm64 --env stable -v
+
+      # 22. Verify APK package, version and signing certificate.
+      - name: Verify APK version and signature
+        working-directory: upstream
+        shell: bash
+        env:
+          STORE_PASSWORD: ${{ secrets.STORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+        run: |
+          set -euo pipefail
+
+          shopt -s nullglob
+          APK_FILES=(dist/*.apk)
+
+          if (( ${#APK_FILES[@]} != 1 )); then
+            echo "::error::Expected exactly one APK in dist/, found ${#APK_FILES[@]}"
+            printf '%s\n' "${APK_FILES[@]}"
+            exit 1
+          fi
+
+          APK="${APK_FILES[0]}"
+
+          APKANALYZER=$(find "${ANDROID_SDK_ROOT}/cmdline-tools" \
+            -type f -name apkanalyzer 2>/dev/null | head -n 1 || true)
+
+          if [[ -z "$APKANALYZER" ]]; then
+            APKANALYZER=$(find "${ANDROID_SDK_ROOT}/build-tools" \
+              -type f -name apkanalyzer 2>/dev/null | head -n 1 || true)
+          fi
+
+          if [[ -z "$APKANALYZER" ]]; then
+            echo "::error::apkanalyzer not found; cannot verify APK"
+            exit 1
+          fi
+
+          APKSIGNER=$(find "${ANDROID_SDK_ROOT}/build-tools" \
+            -type f -name apksigner 2>/dev/null | sort -V | tail -n 1 || true)
+
+          if [[ -z "$APKSIGNER" ]]; then
+            echo "::error::apksigner not found; cannot verify APK signature"
+            exit 1
+          fi
+
+          ACTUAL_PACKAGE=$("$APKANALYZER" manifest application-id "$APK")
+          ACTUAL_CODE=$("$APKANALYZER" manifest version-code "$APK")
+          ACTUAL_NAME=$("$APKANALYZER" manifest version-name "$APK")
+
+          echo "APK: $APK"
+          echo "Package: $ACTUAL_PACKAGE"
+          echo "versionName: $ACTUAL_NAME"
+          echo "versionCode: $ACTUAL_CODE"
+
+          if [[ "$ACTUAL_PACKAGE" != "com.follow.clash.starry" ]]; then
+            echo "::error::Unexpected package name: $ACTUAL_PACKAGE"
+            exit 1
+          fi
+
+          if [[ "$ACTUAL_CODE" != "$EXPECTED_VERSION_CODE" ]]; then
+            echo "::error::Unexpected versionCode: $ACTUAL_CODE (expected $EXPECTED_VERSION_CODE)"
+            exit 1
+          fi
+
+          if [[ "$ACTUAL_NAME" != "$EXPECTED_VERSION_NAME" ]]; then
+            echo "::error::Unexpected versionName: $ACTUAL_NAME (expected $EXPECTED_VERSION_NAME)"
+            exit 1
+          fi
+
+          KEYSTORE="android/app/keystore.jks"
+
+          test -f "$KEYSTORE" || {
+            echo "::error::Keystore not found: $KEYSTORE"
+            exit 1
+          }
+
+          EXPECTED_CERT=$(
+            keytool -exportcert \
+              -keystore "$KEYSTORE" \
+              -storepass "$STORE_PASSWORD" \
+              -alias "$KEY_ALIAS" \
+            | sha256sum \
+            | awk '{print toupper($1)}'
+          )
+
+          "$APKSIGNER" verify --verbose "$APK"
+
+          CERT_OUTPUT=$("$APKSIGNER" verify --print-certs "$APK" 2>&1)
+          printf '%s\n' "$CERT_OUTPUT"
+
+          ACTUAL_CERT=$(
+            printf '%s\n' "$CERT_OUTPUT" \
+              | sed -nE 's/.*certificate SHA-256 digest:[[:space:]]*//Ip' \
+              | head -n 1 \
+              | tr -d ':\r[:space:]' \
+              | tr '[:lower:]' '[:upper:]'
+          )
+
+          if [[ -z "$ACTUAL_CERT" || -z "$EXPECTED_CERT" ]]; then
+            echo "::error::Could not determine APK signing certificate fingerprint"
+            exit 1
+          fi
+
+          if [[ "$ACTUAL_CERT" != "$EXPECTED_CERT" ]]; then
+            echo "::error::APK signing certificate does not match the configured keystore"
+            exit 1
+          fi
+
+          echo "APK package, version and signing certificate verified."
+
+      # 23. Rename the APK to a predictable filename.
+      - name: Rename APK
+        working-directory: upstream
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          shopt -s nullglob
+          APK_FILES=(dist/*.apk)
+
+          if (( ${#APK_FILES[@]} != 1 )); then
+            echo "::error::Expected exactly one APK before renaming"
+            exit 1
+          fi
+
+          DEST="dist/FlClash-${EXPECTED_VERSION_NAME}-android-arm64-v8a.apk"
+
+          if [[ "${APK_FILES[0]}" != "$DEST" ]]; then
+            mv -f "${APK_FILES[0]}" "$DEST"
+          fi
+
+          echo "Final APK: $DEST"
+
+      # 24. Upload the APK as a workflow artifact.
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: FlClash-Android-ARM64-${{ inputs.release_tag }}
+          path: upstream/dist/FlClash-*-android-arm64-v8a.apk
+          if-no-files-found: error
+          retention-days: 30
+
+      # 25. Publish the GitHub Release.
+      - name: Publish GitHub Release
+        working-directory: upstream
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          RELEASE_TITLE: ${{ inputs.release_title }}
+          IS_PRERELEASE: ${{ inputs.prerelease }}
+          REPOSITORY: ${{ github.repository }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if gh release view "$RELEASE_TAG" \
+            --repo "$REPOSITORY" >/dev/null 2>&1; then
+            echo "::error::Release already exists: $RELEASE_TAG"
+            exit 1
+          fi
+
+          shopt -s nullglob
+          APK_FILES=(dist/FlClash-*-android-arm64-v8a.apk)
+
+          if (( ${#APK_FILES[@]} != 1 )); then
+            echo "::error::Expected exactly one renamed APK for release"
+            exit 1
+          fi
+
+          ARGS=(
+            "$RELEASE_TAG"
+            "${APK_FILES[0]}"
+            --repo "$REPOSITORY"
+            --title "$RELEASE_TITLE"
+            --generate-notes
+          )
+
+          if [[ "$IS_PRERELEASE" == "true" ]]; then
+            ARGS+=(--prerelease)
+          fi
+
+          gh release create "${ARGS[@]}"
+
+          echo "Published release: $RELEASE_TAG"
