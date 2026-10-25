@@ -77,4 +77,4 @@ jobs:
       release_title: ${{ needs.check-release.outputs.tag }}
       prerelease: false
 
-    secrets: inherit
+    secrets: inheri
