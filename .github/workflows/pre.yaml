@@ -108,7 +108,6 @@ jobs:
 
     with:
       source_tag: ${{ needs.prepare.outputs.source_tag }}
-      version_name: ${{ needs.prepare.outputs.version_name }}
       release_tag: ${{ needs.prepare.outputs.release_tag }}
       release_title: ${{ needs.prepare.outputs.release_title }}
       prerelease: true
