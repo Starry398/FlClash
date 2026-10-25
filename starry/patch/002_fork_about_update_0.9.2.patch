@@ -1,0 +1,78 @@
+diff --git a/lib/common/constant.dart b/lib/common/constant.dart
+index f5b22e0..b9a2199 100644
+--- a/lib/common/constant.dart
++++ b/lib/common/constant.dart
+@@ -122,6 +122,9 @@ const bootRecordKey = 'boot_record';
+ const appliedConfigMd5Key = 'applied_config_md5';
+ const defaultSystemDnsFallback = '223.5.5.5';
+ const repository = 'chen08209/FlClash';
++
++/// The repository this build links to and takes its updates from.
++const forkRepository = 'Starry398/FlClash';
+ const maxMobileWidth = 600;
+ const maxLaptopWidth = 840;
+ const defaultTestUrl = 'https://www.gstatic.com/generate_204';
+diff --git a/lib/common/request.dart b/lib/common/request.dart
+index cf7ca86..301cb52 100644
+--- a/lib/common/request.dart
++++ b/lib/common/request.dart
+@@ -100,7 +100,7 @@ class Request {
+   Future<Map<String, dynamic>> latestRelease() async {
+     try {
+       final response = await dio.get<Map<String, dynamic>>(
+-        'https://api.github.com/repos/$repository/releases/latest',
++        'https://api.github.com/repos/$forkRepository/releases/latest',
+         options: Options(responseType: ResponseType.json),
+       );
+       return response.data!;
+@@ -111,7 +111,7 @@ class Request {
+       );
+     }
+     final response = await dio.get<void>(
+-      'https://github.com/$repository/releases/latest',
++      'https://github.com/$forkRepository/releases/latest',
+       options: Options(
+         followRedirects: false,
+         validateStatus: (status) => status != null && status < 400,
+diff --git a/lib/providers/actions/common.dart b/lib/providers/actions/common.dart
+index 6aa4cf9..99045c0 100644
+--- a/lib/providers/actions/common.dart
++++ b/lib/providers/actions/common.dart
+@@ -161,7 +161,7 @@ class CommonAction extends _$CommonAction {
+       if (res == true) {
+         unawaited(
+           launchUrl(
+-            Uri.parse('https://github.com/$repository/releases/latest'),
++            Uri.parse('https://github.com/$forkRepository/releases/latest'),
+           ),
+         );
+       } else if (!isUser && res == false) {
+diff --git a/lib/views/about.dart b/lib/views/about.dart
+index 0ecca4b..27b0f4d 100644
+--- a/lib/views/about.dart
++++ b/lib/views/about.dart
+@@ -6,6 +6,7 @@ import 'package:fl_clash/providers/providers.dart';
+ import 'package:fl_clash/state.dart';
+ import 'package:fl_clash/ui/icons/icons.dart';
+ import 'package:fl_clash/ui/ui.dart';
++import 'package:intl/intl.dart';
+ import 'package:material_ui/material_ui.dart';
+ import 'package:flutter_riverpod/flutter_riverpod.dart';
+ 
+@@ -94,6 +95,15 @@ class AboutView extends ConsumerWidget {
+                 url: 'https://github.com/$repository',
+                 label: 'github.com/$repository',
+               ),
++              if (forkRepository != repository)
++                _buildLinkItem(
++                  glyph: AppGlyphs.code,
++                  title: Intl.getCurrentLocale().startsWith('zh')
++                      ? 'Fork 项目'
++                      : 'Fork',
++                  url: 'https://github.com/$forkRepository',
++                  label: 'github.com/$forkRepository',
++                ),
+               _buildLinkItem(
+                 glyph: AppGlyphs.cpu,
+                 title: appLocalizations.core,
+
