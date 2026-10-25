@@ -280,10 +280,10 @@ index 8842d6b..ab65712 100644
                glyph: AppGlyphs.check,
 diff --git a/lib/views/dashboard/widgets/start_fab.dart b/lib/views/dashboard/widgets/start_fab.dart
 new file mode 100644
-index 0000000..b05740a
+index 0000000..d71db0f
 --- /dev/null
 +++ b/lib/views/dashboard/widgets/start_fab.dart
-@@ -0,0 +1,122 @@
+@@ -0,0 +1,128 @@
 +import 'dart:ui' show FontFeature;
 +
 +import 'package:fl_clash/common/common.dart';
@@ -353,9 +353,12 @@ index 0000000..b05740a
 +              ? ref.read(commonActionProvider.notifier).toggleRunning
 +              : null,
 +          child: ConstrainedBox(
++            // The height is fixed: the widening time below fills whatever
++            // height it is given, and the corner slot gives it the whole page.
 +            constraints: const BoxConstraints(
 +              minWidth: _size,
 +              minHeight: _size,
++              maxHeight: _size,
 +            ),
 +            child: Padding(
 +              padding: const EdgeInsets.symmetric(horizontal: 16),
@@ -377,17 +380,20 @@ index 0000000..b05740a
 +                      child: FadeTransition(opacity: animation, child: child),
 +                    ),
 +                    child: isStart
-+                        ? Padding(
++                        ? Center(
 +                            key: const ValueKey('time'),
-+                            padding: const EdgeInsetsDirectional.only(
-+                              start: 8,
-+                              end: 4,
-+                            ),
-+                            child: Text(
-+                              getTimeText(runTime),
-+                              maxLines: 1,
-+                              softWrap: false,
-+                              style: labelStyle,
++                            widthFactor: 1,
++                            child: Padding(
++                              padding: const EdgeInsetsDirectional.only(
++                                start: 8,
++                                end: 4,
++                              ),
++                              child: Text(
++                                getTimeText(runTime),
++                                maxLines: 1,
++                                softWrap: false,
++                                style: labelStyle,
++                              ),
 +                            ),
 +                          )
 +                        : const SizedBox.shrink(key: ValueKey('none')),
