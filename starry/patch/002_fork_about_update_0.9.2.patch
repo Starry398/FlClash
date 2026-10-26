@@ -80,10 +80,10 @@ index 5ae7e94..0f1c520 100644
  
  const releaseNotesBeginMarker = '<!-- flclash:changelog:begin -->';
 diff --git a/lib/common/request.dart b/lib/common/request.dart
-index cf7ca86..34a1d38 100644
+index cf7ca86..a1b0cf1 100644
 --- a/lib/common/request.dart
 +++ b/lib/common/request.dart
-@@ -86,13 +86,57 @@ class Request {
+@@ -86,13 +86,64 @@ class Request {
    }
  
    /// Null when this build is current; throws when GitHub cannot be asked.
@@ -134,10 +134,17 @@ index cf7ca86..34a1d38 100644
 +  }
 +
 +  /// Newest first, as the API returns them.
++  ///
++  /// GitHub's edge cache holds this endpoint for a minute, which leaves a just
++  /// published release invisible; the changing `_` keeps the request off that
++  /// cache. It is a no-op on the server side.
 +  Future<List<Map<String, dynamic>>> releasesList() async {
 +    final response = await dio.get<List<dynamic>>(
 +      'https://api.github.com/repos/$forkRepository/releases',
-+      queryParameters: const {'per_page': 20},
++      queryParameters: {
++        'per_page': 20,
++        '_': DateTime.now().millisecondsSinceEpoch,
++      },
 +      options: Options(responseType: ResponseType.json),
 +    );
 +    return (response.data ?? const [])
@@ -146,7 +153,7 @@ index cf7ca86..34a1d38 100644
    }
  
    /// The release page redirect still answers once the hourly API quota is spent.
-@@ -100,7 +144,7 @@ class Request {
+@@ -100,7 +151,7 @@ class Request {
    Future<Map<String, dynamic>> latestRelease() async {
      try {
        final response = await dio.get<Map<String, dynamic>>(
@@ -155,7 +162,7 @@ index cf7ca86..34a1d38 100644
          options: Options(responseType: ResponseType.json),
        );
        return response.data!;
-@@ -111,7 +155,7 @@ class Request {
+@@ -111,7 +162,7 @@ class Request {
        );
      }
      final response = await dio.get<void>(
