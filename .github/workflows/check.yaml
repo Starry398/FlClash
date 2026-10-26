@@ -1,0 +1,157 @@
+name: Check
+
+# Validates that the patches in starry/patch still apply to the current upstream
+# release, hunk by hunk, without building anything. It catches a shifted context
+# or a wrong hunk count in about forty seconds instead of two minutes into a
+# Pre run, and it names the file and line that broke.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: flclash-check-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  patches:
+    name: Patches apply
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Resolve upstream tag
+        id: upstream
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          TAG=$(gh api repos/chen08209/FlClash/releases/latest --jq '.tag_name')
+
+          if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Unexpected upstream tag: $TAG"
+            exit 1
+          fi
+
+          echo "Upstream stable tag: $TAG"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout upstream release source
+        uses: actions/checkout@v4
+        with:
+          repository: chen08209/FlClash
+          ref: ${{ steps.upstream.outputs.tag }}
+          fetch-depth: 1
+          submodules: false
+          path: upstream
+
+      - name: Checkout custom files
+        uses: actions/checkout@v4
+        with:
+          path: custom-files
+          sparse-checkout: |
+            starry/patch
+          sparse-checkout-cone-mode: false
+
+      - name: Validate patches
+        working-directory: upstream
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          PATCH_DIR="../custom-files/starry/patch"
+
+          test -d "$PATCH_DIR" || {
+            echo "::error::Patch directory not found: $PATCH_DIR"
+            exit 1
+          }
+
+          shopt -s nullglob
+          PATCHES=("$PATCH_DIR"/*.patch)
+
+          if (( ${#PATCHES[@]} == 0 )); then
+            echo "No .patch files found. Nothing to check."
+            exit 0
+          fi
+
+          for patch in "${PATCHES[@]}"; do
+            echo "::group::$(basename "$patch")"
+
+            python3 - "$patch" <<'PY'
+          import pathlib
+          import re
+          import sys
+
+          path = pathlib.Path(sys.argv[1])
+          raw = path.read_text()
+
+          # A patch has to end with exactly one newline; editors drop it or
+          # leave a blank line behind, and git then reports "corrupt patch".
+          fixed = raw.rstrip("\n") + "\n"
+          if fixed != raw:
+              path.write_text(fixed)
+              print(f"normalised trailing newlines: {path.name}")
+              raw = fixed
+
+          lines = raw.split("\n")
+          if lines and lines[-1] == "":
+              lines = lines[:-1]
+
+          current = None
+          index = 0
+          bad = 0
+          print(f"{len(lines)} lines")
+
+          while index < len(lines):
+              line = lines[index]
+              if line.startswith("diff --git "):
+                  current = line.split(" b/")[-1]
+                  print(f"  file: {current}")
+              header = re.match(r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@", line)
+              if header:
+                  old_expected = int(header.group(2) or 1)
+                  new_expected = int(header.group(4) or 1)
+                  index += 1
+                  old_seen = new_seen = 0
+                  while index < len(lines):
+                      body = lines[index]
+                      if body.startswith("@@") or body.startswith("diff --git "):
+                          break
+                      if body.startswith(" ") or body == "":
+                          old_seen += 1
+                          new_seen += 1
+                      elif body.startswith("-"):
+                          old_seen += 1
+                      elif body.startswith("+"):
+                          new_seen += 1
+                      index += 1
+                  if old_seen != old_expected or new_seen != new_expected:
+                      print(
+                          f"  ! hunk at line {index}: declared "
+                          f"-{old_expected} +{new_expected}, found "
+                          f"-{old_seen} +{new_seen}"
+                      )
+                      bad += 1
+                  continue
+              index += 1
+
+          if bad:
+              print(f"  {bad} malformed hunk(s)")
+              sys.exit(1)
+          print("  all hunks match their declared counts")
+          PY
+
+            echo "Checking against the upstream tree"
+            git apply --check "$patch" || {
+              echo "::error::Patch cannot be applied: $(basename "$patch")"
+              exit 1
+            }
+
+            git apply --stat "$patch"
+            git apply "$patch"
+            echo "::endgroup::"
+          done
+
+          echo "All ${#PATCHES[@]} patch(es) apply cleanly."
