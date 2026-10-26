@@ -1,32 +1,30 @@
 diff --git a/lib/ui/floating_action.dart b/lib/ui/floating_action.dart
 new file mode 100644
-index 0000000..d33969e
+index 0000000..71f9dcf
 --- /dev/null
 +++ b/lib/ui/floating_action.dart
-@@ -0,0 +1,26 @@
+@@ -0,0 +1,24 @@
 +import 'package:fl_clash/ui/context.dart';
 +import 'package:material_ui/material_ui.dart';
 +
-+/// Brings a corner button in when its page opens. It is there from the first
-+/// frame, a little low and a little small, and settles into place.
++/// Fades a corner button in when its page opens. The motion itself belongs to
++/// the button: a corner control that is already running unrolls its width on
++/// the first frame, and that is the only movement worth showing here.
 +class FloatingActionEntrance extends StatelessWidget {
 +  const FloatingActionEntrance({super.key, required this.child});
 +
 +  final Widget child;
 +
-+  static const _duration = Duration(milliseconds: 420);
++  static const _duration = Duration(milliseconds: 160);
 +
 +  @override
 +  Widget build(BuildContext context) {
 +    return TweenAnimationBuilder<double>(
 +      tween: Tween(begin: 0, end: 1),
 +      duration: context.motionDuration(_duration),
-+      curve: Curves.easeOutCubic,
++      curve: Curves.easeOut,
 +      child: child,
-+      builder: (_, t, child) => Transform.translate(
-+        offset: Offset(0, 14 * (1 - t)),
-+        child: Transform.scale(scale: 0.86 + 0.14 * t, child: child),
-+      ),
++      builder: (_, t, child) => Opacity(opacity: t, child: child),
 +    );
 +  }
 +}
@@ -96,7 +94,7 @@ index 9ae9c66..84eddf7 100644
              child: body,
            )
          : body;
-@@ -958,6 +974,14 @@ class CommonScaffoldState extends State<CommonScaffold>
+@@ -958,6 +974,14 @@ class CommonScaffoldState extends State<CommonScaffold> {
          child: Scaffold(
            appBar: appBar,
            extendBodyBehindAppBar: barFloats,
@@ -133,10 +131,11 @@ index 8842d6b..ab65712 100644
                glyph: AppGlyphs.check,
 diff --git a/lib/views/dashboard/widgets/start_fab.dart b/lib/views/dashboard/widgets/start_fab.dart
 new file mode 100644
-index 0000000..d88cbae
+index 0000000..fbc367e
 --- /dev/null
 +++ b/lib/views/dashboard/widgets/start_fab.dart
-@@ -0,0 +1,139 @@
+@@ -0,0 +1,189 @@
++import 'dart:async';
 +import 'dart:ui' show FontFeature;
 +
 +import 'package:fl_clash/common/common.dart';
@@ -150,8 +149,9 @@ index 0000000..d88cbae
 +
 +/// Starts and stops the tunnel from the corner of the page. Stopped, it is a
 +/// plain play button; running, it widens to a pause button that carries the
-+/// run time. The width, the icon and the time all move together when it
-+/// starts or stops. It rises into place when the page opens.
++/// run time. The width, the icon and the time all move together when it starts
++/// or stops, and the page opening replays that same motion once, a little
++/// quicker, so a tunnel that was already up reads as "just started".
 +class StartFab extends ConsumerStatefulWidget {
 +  const StartFab({super.key});
 +
@@ -159,19 +159,59 @@ index 0000000..d88cbae
 +  ConsumerState<StartFab> createState() => _StartFabState();
 +}
 +
-+class _StartFabState extends ConsumerState<StartFab> {
++class _StartFabState extends ConsumerState<StartFab>
++    with SingleTickerProviderStateMixin {
 +  static const _size = 56.0;
++  static const _entranceDuration = Duration(milliseconds: 280);
 +  static const _morphDuration = Duration(milliseconds: 360);
 +  static const _widenDuration = Duration(milliseconds: 340);
 +  static const _settleTime = Duration(milliseconds: 1200);
 +
-+  // The state the app opens with settles in as the core reports back. That
-+  // is shown at once, so the entrance is the only motion in those moments.
-+  final _openedAt = DateTime.now();
++  /// 0 is play, 1 is pause. Driven directly instead of through a tween so the
++  /// entrance can replay the exact morph the start action uses.
++  late final AnimationController _morph = AnimationController(
++    vsync: this,
++    duration: _entranceDuration,
++  );
++
++  Timer? _settleTimer;
++  bool _settled = false;
++
++  /// False on the first frame so the width unrolls instead of popping in at
++  /// its final size. The run time is gated on this together with isStart.
++  bool _entered = false;
++
++  @override
++  void initState() {
++    super.initState();
++    WidgetsBinding.instance.addPostFrameCallback((_) {
++      if (!mounted) return;
++      setState(() => _entered = true);
++      if (ref.read(isStartProvider)) {
++        _morph.forward();
++      }
++    });
++    // settled used to be worked out inside build, so a page that never rebuilt
++    // kept the transitions at zero duration and the first tap jumped.
++    _settleTimer = Timer(_settleTime, () {
++      if (!mounted) return;
++      setState(() => _settled = true);
++    });
++  }
++
++  @override
++  void dispose() {
++    _settleTimer?.cancel();
++    _morph.dispose();
++    super.dispose();
++  }
++
++  Duration get _switchDuration => context.motionDuration(
++    _settled ? _widenDuration : _entranceDuration,
++  );
 +
 +  @override
 +  Widget build(BuildContext context) {
-+    final settled = DateTime.now().difference(_openedAt) > _settleTime;
 +    final colorScheme = context.colorScheme;
 +    final appLocalizations = context.appLocalizations;
 +    final hasProfile = ref.watch(
@@ -180,22 +220,34 @@ index 0000000..d88cbae
 +    final isStart = ref.watch(isStartProvider);
 +    final suspended = isStart && ref.watch(suspendProvider);
 +    final runTime = isStart ? ref.watch(runTimeProvider) : null;
++
++    ref.listen(isStartProvider, (_, next) {
++      if (!_entered) return;
++      _morph.animateTo(
++        next ? 1 : 0,
++        duration: _settled
++            ? context.motionDuration(_morphDuration)
++            : _morph.isAnimating
++            ? _entranceDuration
++            : Duration.zero,
++      );
++    });
++
 +    final ink = hasProfile
 +        ? colorScheme.onPrimary
 +        : colorScheme.onSurface.withValues(alpha: 0.38);
-+    final labelStyle = (Theme.of(context).textTheme.labelLarge ?? const TextStyle())
++    final labelStyle = (Theme.of(context).textTheme.labelLarge ??
++            const TextStyle())
 +        .copyWith(
 +          color: ink,
 +          fontFeatures: const [FontFeature.tabularFigures()],
 +        );
 +    final icon = suspended
 +        ? GlyphIcon(AppGlyphs.wifiOff, color: ink, fill: 1)
-+        : TweenAnimationBuilder<double>(
-+            tween: Tween(end: isStart ? 1 : 0),
-+            duration: context.motionDuration(settled ? _morphDuration : Duration.zero),
-+            curve: Curves.easeOutBack,
-+            builder: (_, progress, _) =>
-+                GlyphIcon(AppGlyphs.playPause(progress), color: ink, fill: 1),
++        : AnimatedBuilder(
++            animation: _morph,
++            builder: (_, _) =>
++                GlyphIcon(AppGlyphs.playPause(_morph.value), color: ink, fill: 1),
 +          );
 +    final button = Material(
 +      color: hasProfile
@@ -231,23 +283,19 @@ index 0000000..d88cbae
 +                children: [
 +                  icon,
 +                  // The time grows out of the icon as the button widens, and
-+                  // folds back into it as the button narrows.
++                  // folds back into it as the button narrows. Gated on _entered
++                  // so the first frame starts narrow and unrolls from there.
 +                  AnimatedSwitcher(
-+                    // While the opening state settles, each flip gets a fresh
-+                    // switcher that simply shows it. A zero duration would
-+                    // stay on the time that flip brought in, and fold it away
-+                    // at once the first time the button is stopped.
-+                    key: ValueKey(settled ? 'live' : 'opening-$isStart'),
-+                    duration: context.motionDuration(_widenDuration),
++                    duration: _switchDuration,
 +                    switchInCurve: Curves.easeOutCubic,
-+                    switchOutCurve: Curves.easeInCubic,
++                    switchOutCurve: Curves.easeInOutCubic,
 +                    transitionBuilder: (child, animation) => SizeTransition(
 +                      axis: Axis.horizontal,
 +                      axisAlignment: -1,
 +                      sizeFactor: animation,
 +                      child: FadeTransition(opacity: animation, child: child),
 +                    ),
-+                    child: isStart
++                    child: isStart && _entered
 +                        ? Center(
 +                            key: const ValueKey('time'),
 +                            widthFactor: 1,
@@ -335,4 +383,3 @@ index f2426f4..681f4d2 100644
        searchActions: [?primaryAction],
        iconActions: [
          if (_isTab && !picker)
-
