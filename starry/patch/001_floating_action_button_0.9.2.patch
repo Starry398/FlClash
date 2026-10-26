@@ -1,42 +1,44 @@
 diff --git a/lib/ui/floating_action.dart b/lib/ui/floating_action.dart
 new file mode 100644
-index 0000000..f252ffb
+index 0000000..019f781
 --- /dev/null
 +++ b/lib/ui/floating_action.dart
-@@ -0,0 +1,105 @@
+@@ -0,0 +1,113 @@
 +import 'dart:math' as math;
 +
 +import 'package:fl_clash/ui/context.dart';
 +import 'package:flutter/foundation.dart' show clampDouble;
 +import 'package:material_ui/material_ui.dart';
 +
-+/// How far a corner button overshoots. The entrance and the bounce a tap earns
-+/// share it, so the two read as the same material rather than two animations.
++/// How far a corner action bounces when it flips state.
 +const double kFloatingBounce = 0.08;
 +
-+/// Fades a corner button in when its page opens, then lets it settle with a
-+/// rebound. The width and the icon morph belong to the button itself; the scale
-+/// here only has to make that landing read as a landing.
++/// Fades a corner button in when its page opens, grows it to size, then lets a
++/// small wobble die out, so the button reads as arriving and settling rather
++/// than appearing frozen.
 +class FloatingActionEntrance extends StatelessWidget {
 +  const FloatingActionEntrance({super.key, required this.child});
 +
 +  final Widget child;
 +
-+  static const _duration = Duration(milliseconds: 560);
++  static const _duration = Duration(milliseconds: 620);
 +
-+  /// 0.84 up to 1 + kFloatingBounce, dips below 1, then rests. The overshoot
-+  /// lands where the bar buttons do, and the dip is what makes it read as a
-+  /// rebound rather than a stop.
++  /// 0.94 to 1.00 over the first 45%, with no overshoot: a scale bounce on a
++  /// 144dp wide button reads as a jolt, which is what the wobble is for.
 +  static double _scaleAt(double t) {
-+    const peakAt = 0.58;
-+    const peak = 1 + kFloatingBounce;
-+    const start = 0.84;
-+    if (t <= peakAt) {
-+      return start +
-+          (peak - start) * Curves.easeOutCubic.transform(t / peakAt);
-+    }
-+    final tail = (t - peakAt) / (1 - peakAt);
-+    return peak - (peak - 1) * Curves.easeOutBack.transform(tail);
++    final progress = Curves.easeOutCubic.transform(
++      clampDouble(t / 0.45, 0, 1),
++    );
++    return 0.94 + 0.06 * progress;
++  }
++
++  /// A few decaying swings once the button is up. The tail falls away faster
++  /// than the head, which is what keeps it from looking like a metronome.
++  static double _wobbleAt(double t) {
++    if (t < 0.34) return 0;
++    final progress = (t - 0.34) / 0.66;
++    final decay = math.pow(1 - progress, 1.7).toDouble();
++    return math.sin(progress * math.pi * 5) * decay * 0.03;
 +  }
 +
 +  @override
@@ -46,28 +48,34 @@ index 0000000..f252ffb
 +      duration: context.motionDuration(_duration),
 +      child: child,
 +      builder: (_, t, child) => Opacity(
-+        opacity: clampDouble(t / 0.35, 0, 1),
-+        child: Transform.scale(scale: _scaleAt(t), child: child),
++        opacity: clampDouble(t / 0.3, 0, 1),
++        child: Transform.rotate(
++          angle: _wobbleAt(t),
++          child: Transform.scale(scale: _scaleAt(t), child: child),
++        ),
 +      ),
 +    );
 +  }
 +}
 +
-+/// Bounces [child] whenever [trigger] changes, which is what a corner action
-+/// does when its state flips. The page opening is not a tap, so it walks in
-+/// through [FloatingActionEntrance] instead and [enabled] keeps the state that
-+/// settles on its own from bouncing.
++/// Bounces [child] when [trigger] flips, which is what a corner action does
++/// when it starts doing something. [risingOnly] keeps the bounce for the start
++/// of an action and leaves its end alone.
 +class PressBounce extends StatefulWidget {
 +  const PressBounce({
 +    super.key,
 +    required this.trigger,
 +    required this.child,
 +    this.enabled = true,
++    this.risingOnly = false,
++    this.bounce = kFloatingBounce,
 +  });
 +
 +  final Object? trigger;
 +  final Widget child;
 +  final bool enabled;
++  final bool risingOnly;
++  final double bounce;
 +
 +  @override
 +  State<PressBounce> createState() => _PressBounceState();
@@ -85,9 +93,9 @@ index 0000000..f252ffb
 +  @override
 +  void didUpdateWidget(PressBounce oldWidget) {
 +    super.didUpdateWidget(oldWidget);
-+    if (widget.enabled && oldWidget.trigger != widget.trigger) {
-+      _controller.forward(from: 0);
-+    }
++    if (!widget.enabled || oldWidget.trigger == widget.trigger) return;
++    if (widget.risingOnly && widget.trigger != true) return;
++    _controller.forward(from: 0);
 +  }
 +
 +  @override
@@ -101,7 +109,7 @@ index 0000000..f252ffb
 +    return AnimatedBuilder(
 +      animation: _controller,
 +      builder: (_, child) {
-+        final bump = math.sin(math.pi * _controller.value) * kFloatingBounce;
++        final bump = math.sin(math.pi * _controller.value) * widget.bounce;
 +        if (bump == 0) return child!;
 +        return Transform.scale(scale: 1 + bump, child: child);
 +      },
@@ -130,7 +138,7 @@ index 1feadb4..a524a38 100644
  
    const BottomInsetScope({
 diff --git a/lib/ui/scaffold.dart b/lib/ui/scaffold.dart
-index 9ae9c66..84eddf7 100644
+index 9ae9c66..6ab896f 100644
 --- a/lib/ui/scaffold.dart
 +++ b/lib/ui/scaffold.dart
 @@ -52,6 +52,10 @@ class CommonScaffold extends StatefulWidget {
@@ -175,15 +183,19 @@ index 9ae9c66..84eddf7 100644
              child: body,
            )
          : body;
-@@ -958,6 +974,14 @@ class CommonScaffoldState extends State<CommonScaffold> {
+@@ -958,6 +974,18 @@ class CommonScaffoldState extends State<CommonScaffold> {
          child: Scaffold(
            appBar: appBar,
            extendBodyBehindAppBar: barFloats,
 +          floatingActionButton: fab == null
 +              ? null
-+              : Padding(
-+                  padding: EdgeInsets.only(
-+                    bottom: lift + BottomInsetScope.floatingActionLift,
++              // A transform, not padding: a docked search changes this offset
++              // every time it opens, and padding would relayout the corner
++              // button on that same frame.
++              : Transform.translate(
++                  offset: Offset(
++                    0,
++                    -(lift + BottomInsetScope.floatingActionLift),
 +                  ),
 +                  child: RepaintBoundary(child: fab),
 +                ),
@@ -212,10 +224,10 @@ index 8842d6b..ab65712 100644
                glyph: AppGlyphs.check,
 diff --git a/lib/views/dashboard/widgets/start_fab.dart b/lib/views/dashboard/widgets/start_fab.dart
 new file mode 100644
-index 0000000..039eec2
+index 0000000..2b558d9
 --- /dev/null
 +++ b/lib/views/dashboard/widgets/start_fab.dart
-@@ -0,0 +1,195 @@
+@@ -0,0 +1,189 @@
 +import 'dart:async';
 +import 'dart:ui' show FontFeature;
 +
@@ -402,17 +414,11 @@ index 0000000..039eec2
 +        ),
 +      ),
 +    );
-+    return FloatingActionEntrance(
-+      child: PressBounce(
-+        trigger: isStart,
-+        enabled: _settled,
-+        child: button,
-+      ),
-+    );
++    return FloatingActionEntrance(child: button);
 +  }
 +}
 diff --git a/lib/views/proxies/proxies.dart b/lib/views/proxies/proxies.dart
-index f2426f4..ad0f8ae 100644
+index f2426f4..508166c 100644
 --- a/lib/views/proxies/proxies.dart
 +++ b/lib/views/proxies/proxies.dart
 @@ -2,6 +2,7 @@ import 'package:fl_clash/common/common.dart';
@@ -423,7 +429,7 @@ index f2426f4..ad0f8ae 100644
  import 'package:fl_clash/ui/icons/icons.dart';
  import 'package:fl_clash/views/proxies/list.dart';
  import 'package:fl_clash/widgets/widgets.dart';
-@@ -113,16 +114,47 @@ class _ProxiesViewState extends ConsumerState<ProxiesView> {
+@@ -113,16 +114,49 @@ class _ProxiesViewState extends ConsumerState<ProxiesView> {
      ];
    }
  
@@ -440,6 +446,8 @@ index f2426f4..ad0f8ae 100644
 +    final label = context.appLocalizations.delayTest;
 +    return PressBounce(
 +      trigger: isDelayTesting,
++      risingOnly: true,
++      bounce: 0.045,
 +      child: FloatingActionButton.extended(
 +        heroTag: null,
 +        tooltip: label,
@@ -475,7 +483,7 @@ index f2426f4..ad0f8ae 100644
        tooltip: context.appLocalizations.delayTest,
        isLoading: isDelayTesting,
      );
-@@ -160,6 +192,7 @@ class _ProxiesViewState extends ConsumerState<ProxiesView> {
+@@ -160,6 +194,7 @@ class _ProxiesViewState extends ConsumerState<ProxiesView> {
        isLoading: isLoading,
        resizeToAvoidBottomInset: false,
        primaryAction: primaryAction,
