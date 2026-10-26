@@ -12,22 +12,128 @@ index f5b22e0..b9a2199 100644
  const maxMobileWidth = 600;
  const maxLaptopWidth = 840;
  const defaultTestUrl = 'https://www.gstatic.com/generate_204';
+diff --git a/lib/common/package.dart b/lib/common/package.dart
+index 5ae7e94..0f1c520 100644
+--- a/lib/common/package.dart
++++ b/lib/common/package.dart
+@@ -12,31 +12,38 @@ extension PackageInfoExtension on PackageInfo {
+   ].join(' ');
+ }
+ 
+-int compareVersions(String version1, String version2) {
+-  final List<String> v1 = version1.split('+')[0].split('.');
+-  final List<String> v2 = version2.split('+')[0].split('.');
+-  final int major1 = int.parse(v1[0]);
+-  final int major2 = int.parse(v2[0]);
+-  if (major1 != major2) {
+-    return major1.compareTo(major2);
+-  }
+-  final int minor1 = v1.length > 1 ? int.parse(v1[1]) : 0;
+-  final int minor2 = v2.length > 1 ? int.parse(v2[1]) : 0;
+-  if (minor1 != minor2) {
+-    return minor1.compareTo(minor2);
+-  }
+-  final int patch1 = v1.length > 2 ? int.parse(v1[2]) : 0;
+-  final int patch2 = v2.length > 2 ? int.parse(v2[2]) : 0;
+-  if (patch1 != patch2) {
+-    return patch1.compareTo(patch2);
++/// Splits `1.2.3-pre.4+build` into its numbers, the prerelease number (null
++/// for a stable release) and the build number.
++({int major, int minor, int patch, int? pre, int build}) _parseVersion(
++  String version,
++) {
++  final parts = version.split('+');
++  final build = parts.length > 1 ? int.tryParse(parts[1]) ?? 0 : 0;
++  final core = parts[0].split('-');
++  final numbers = core[0].split('.');
++  int at(int index) =>
++      index < numbers.length ? int.tryParse(numbers[index]) ?? 0 : 0;
++  int? pre;
++  if (core.length > 1) {
++    final tail = core[1].split('.');
++    pre = tail.length > 1 ? int.tryParse(tail[1]) : int.tryParse(tail[0]);
++    pre ??= 0;
+   }
+-  final int build1 = version1.contains('+')
+-      ? int.parse(version1.split('+')[1])
+-      : 0;
+-  final int build2 = version2.contains('+')
+-      ? int.parse(version2.split('+')[1])
+-      : 0;
+-  return build1.compareTo(build2);
++  return (major: at(0), minor: at(1), patch: at(2), pre: pre, build: build);
++}
++
++/// Positive when [version1] is newer. A prerelease and the stable release with
++/// the same numbers count as equal: this fork builds both from the same
++/// upstream tag, so nudging a -pre user towards that stable would be noise.
++int compareVersions(String version1, String version2) {
++  final a = _parseVersion(version1);
++  final b = _parseVersion(version2);
++  if (a.major != b.major) return a.major.compareTo(b.major);
++  if (a.minor != b.minor) return a.minor.compareTo(b.minor);
++  if (a.patch != b.patch) return a.patch.compareTo(b.patch);
++  if (a.pre != null && b.pre != null) return a.pre!.compareTo(b.pre!);
++  if (a.pre != null || b.pre != null) return 0;
++  return a.build.compareTo(b.build);
+ }
+ 
+ const releaseNotesBeginMarker = '<!-- flclash:changelog:begin -->';
 diff --git a/lib/common/request.dart b/lib/common/request.dart
-index cf7ca86..0629e2d 100644
+index cf7ca86..f0790ad 100644
 --- a/lib/common/request.dart
 +++ b/lib/common/request.dart
-@@ -89,7 +89,9 @@ class Request {
+@@ -86,13 +86,44 @@ class Request {
+   }
+ 
+   /// Null when this build is current; throws when GitHub cannot be asked.
++  ///
++  /// A prerelease build looks at prereleases too, so pre.3 can find pre.4. A
++  /// stable build never does, so a test build never shows up as an update.
    Future<Map<String, dynamic>?> checkForUpdate() async {
-     final release = await latestRelease();
-     final remoteVersion = release['tag_name'] as String;
--    final version = globalState.packageInfo.version;
-+    // Compare on the release part only: a -pre suffix would otherwise be
-+    // read as part of the patch number and make the parser throw.
-+    final version = globalState.packageInfo.version.split('-').first;
-     final hasUpdate =
-         compareVersions(remoteVersion.replaceAll('v', ''), version) > 0;
-     return hasUpdate ? release : null;
-@@ -100,7 +102,7 @@ class Request {
+-    final release = await latestRelease();
+-    final remoteVersion = release['tag_name'] as String;
+     final version = globalState.packageInfo.version;
+-    final hasUpdate =
+-        compareVersions(remoteVersion.replaceAll('v', ''), version) > 0;
+-    return hasUpdate ? release : null;
++    final includePrerelease = version.contains('-');
++    final releases = await releasesList();
++
++    Map<String, dynamic>? newest;
++    String? newestVersion;
++    for (final release in releases) {
++      if (release['draft'] == true) continue;
++      if (!includePrerelease && release['prerelease'] == true) continue;
++      final tag = release['tag_name'];
++      if (tag is! String) continue;
++      final candidate = tag.replaceAll('v', '');
++      final newer =
++          newestVersion == null || compareVersions(candidate, newestVersion) > 0;
++      if (newer) {
++        newest = release;
++        newestVersion = candidate;
++      }
++    }
++
++    if (newest == null || newestVersion == null) return null;
++    return compareVersions(newestVersion, version) > 0 ? newest : null;
++  }
++
++  /// Newest first, as the API returns them.
++  Future<List<Map<String, dynamic>>> releasesList() async {
++    final response = await dio.get<List<dynamic>>(
++      'https://api.github.com/repos/$forkRepository/releases',
++      queryParameters: const {'per_page': 20},
++      options: Options(responseType: ResponseType.json),
++    );
++    return (response.data ?? const [])
++        .whereType<Map<String, dynamic>>()
++        .toList();
+   }
+ 
+   /// The release page redirect still answers once the hourly API quota is spent.
+@@ -100,7 +131,7 @@ class Request {
    Future<Map<String, dynamic>> latestRelease() async {
      try {
        final response = await dio.get<Map<String, dynamic>>(
@@ -36,7 +142,7 @@ index cf7ca86..0629e2d 100644
          options: Options(responseType: ResponseType.json),
        );
        return response.data!;
-@@ -111,7 +113,7 @@ class Request {
+@@ -111,7 +142,7 @@ class Request {
        );
      }
      final response = await dio.get<void>(
