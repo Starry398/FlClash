@@ -12,6 +12,92 @@ index f5b22e0..b9a2199 100644
  const maxMobileWidth = 600;
  const maxLaptopWidth = 840;
  const defaultTestUrl = 'https://www.gstatic.com/generate_204';
+diff --git a/lib/common/package.dart b/lib/common/package.dart
+index 5ae7e94..fb41835 100644
+--- a/lib/common/package.dart
++++ b/lib/common/package.dart
+@@ -12,31 +12,60 @@ extension PackageInfoExtension on PackageInfo {
+   ].join(' ');
+ }
+ 
++/// Compares versions such as 0.9.2+2026102401 or 0.9.2-pre.2: the numbers
++/// first, then a release over its own pre-release, then the build number.
+ int compareVersions(String version1, String version2) {
+-  final List<String> v1 = version1.split('+')[0].split('.');
+-  final List<String> v2 = version2.split('+')[0].split('.');
+-  final int major1 = int.parse(v1[0]);
+-  final int major2 = int.parse(v2[0]);
+-  if (major1 != major2) {
+-    return major1.compareTo(major2);
++  final a = _Version.parse(version1);
++  final b = _Version.parse(version2);
++  for (var i = 0; i < 3; i++) {
++    final order = a.numbers[i].compareTo(b.numbers[i]);
++    if (order != 0) {
++      return order;
++    }
+   }
+-  final int minor1 = v1.length > 1 ? int.parse(v1[1]) : 0;
+-  final int minor2 = v2.length > 1 ? int.parse(v2[1]) : 0;
+-  if (minor1 != minor2) {
+-    return minor1.compareTo(minor2);
++  final preA = a.pre;
++  final preB = b.pre;
++  if (preA != preB) {
++    if (preA == null) {
++      return 1;
++    }
++    if (preB == null) {
++      return -1;
++    }
++    return preA.compareTo(preB);
+   }
+-  final int patch1 = v1.length > 2 ? int.parse(v1[2]) : 0;
+-  final int patch2 = v2.length > 2 ? int.parse(v2[2]) : 0;
+-  if (patch1 != patch2) {
+-    return patch1.compareTo(patch2);
++  return a.build.compareTo(b.build);
++}
++
++class _Version {
++  const _Version(this.numbers, this.pre, this.build);
++
++  final List<int> numbers;
++
++  /// Null for a release; the pre-release's own number otherwise, 0 if it has
++  /// none.
++  final int? pre;
++  final int build;
++
++  factory _Version.parse(String version) {
++    final plus = version.split('+');
++    final dash = plus[0].split('-');
++    final numbers = [
++      for (final part in dash[0].split('.')) int.tryParse(part) ?? 0,
++    ];
++    while (numbers.length < 3) {
++      numbers.add(0);
++    }
++    final label = dash.skip(1).join('-');
++    final digits = RegExp(r'\d+').allMatches(label);
++    return _Version(
++      numbers,
++      dash.length > 1
++          ? (digits.isEmpty ? 0 : int.parse(digits.last.group(0)!))
++          : null,
++      plus.length > 1 ? int.tryParse(plus[1]) ?? 0 : 0,
++    );
+   }
+-  final int build1 = version1.contains('+')
+-      ? int.parse(version1.split('+')[1])
+-      : 0;
+-  final int build2 = version2.contains('+')
+-      ? int.parse(version2.split('+')[1])
+-      : 0;
+-  return build1.compareTo(build2);
+ }
+ 
+ const releaseNotesBeginMarker = '<!-- flclash:changelog:begin -->';
 diff --git a/lib/common/request.dart b/lib/common/request.dart
 index cf7ca86..301cb52 100644
 --- a/lib/common/request.dart
