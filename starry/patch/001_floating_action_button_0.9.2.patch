@@ -1,12 +1,18 @@
 diff --git a/lib/ui/floating_action.dart b/lib/ui/floating_action.dart
 new file mode 100644
-index 0000000..71f9dcf
+index 0000000..f252ffb
 --- /dev/null
 +++ b/lib/ui/floating_action.dart
-@@ -0,0 +1,42 @@
+@@ -0,0 +1,105 @@
++import 'dart:math' as math;
++
 +import 'package:fl_clash/ui/context.dart';
 +import 'package:flutter/foundation.dart' show clampDouble;
 +import 'package:material_ui/material_ui.dart';
++
++/// How far a corner button overshoots. The entrance and the bounce a tap earns
++/// share it, so the two read as the same material rather than two animations.
++const double kFloatingBounce = 0.08;
 +
 +/// Fades a corner button in when its page opens, then lets it settle with a
 +/// rebound. The width and the icon morph belong to the button itself; the scale
@@ -18,13 +24,13 @@ index 0000000..71f9dcf
 +
 +  static const _duration = Duration(milliseconds: 560);
 +
-+  /// 0.86 up to 1.055, dips to 0.995, then rests at 1.00. The overshoot lands
-+  /// where the bar buttons do (`Curves.easeOutBack`), and the dip is what makes
-+  /// it read as a rebound rather than a stop.
++  /// 0.84 up to 1 + kFloatingBounce, dips below 1, then rests. The overshoot
++  /// lands where the bar buttons do, and the dip is what makes it read as a
++  /// rebound rather than a stop.
 +  static double _scaleAt(double t) {
-+    const peakAt = 0.60;
-+    const peak = 1.055;
-+    const start = 0.86;
++    const peakAt = 0.58;
++    const peak = 1 + kFloatingBounce;
++    const start = 0.84;
 +    if (t <= peakAt) {
 +      return start +
 +          (peak - start) * Curves.easeOutCubic.transform(t / peakAt);
@@ -43,6 +49,63 @@ index 0000000..71f9dcf
 +        opacity: clampDouble(t / 0.35, 0, 1),
 +        child: Transform.scale(scale: _scaleAt(t), child: child),
 +      ),
++    );
++  }
++}
++
++/// Bounces [child] whenever [trigger] changes, which is what a corner action
++/// does when its state flips. The page opening is not a tap, so it walks in
++/// through [FloatingActionEntrance] instead and [enabled] keeps the state that
++/// settles on its own from bouncing.
++class PressBounce extends StatefulWidget {
++  const PressBounce({
++    super.key,
++    required this.trigger,
++    required this.child,
++    this.enabled = true,
++  });
++
++  final Object? trigger;
++  final Widget child;
++  final bool enabled;
++
++  @override
++  State<PressBounce> createState() => _PressBounceState();
++}
++
++class _PressBounceState extends State<PressBounce>
++    with SingleTickerProviderStateMixin {
++  static const _duration = Duration(milliseconds: 340);
++
++  late final AnimationController _controller = AnimationController(
++    vsync: this,
++    duration: _duration,
++  );
++
++  @override
++  void didUpdateWidget(PressBounce oldWidget) {
++    super.didUpdateWidget(oldWidget);
++    if (widget.enabled && oldWidget.trigger != widget.trigger) {
++      _controller.forward(from: 0);
++    }
++  }
++
++  @override
++  void dispose() {
++    _controller.dispose();
++    super.dispose();
++  }
++
++  @override
++  Widget build(BuildContext context) {
++    return AnimatedBuilder(
++      animation: _controller,
++      builder: (_, child) {
++        final bump = math.sin(math.pi * _controller.value) * kFloatingBounce;
++        if (bump == 0) return child!;
++        return Transform.scale(scale: 1 + bump, child: child);
++      },
++      child: widget.child,
 +    );
 +  }
 +}
@@ -149,10 +212,10 @@ index 8842d6b..ab65712 100644
                glyph: AppGlyphs.check,
 diff --git a/lib/views/dashboard/widgets/start_fab.dart b/lib/views/dashboard/widgets/start_fab.dart
 new file mode 100644
-index 0000000..fbc367e
+index 0000000..039eec2
 --- /dev/null
 +++ b/lib/views/dashboard/widgets/start_fab.dart
-@@ -0,0 +1,189 @@
+@@ -0,0 +1,195 @@
 +import 'dart:async';
 +import 'dart:ui' show FontFeature;
 +
@@ -339,14 +402,28 @@ index 0000000..fbc367e
 +        ),
 +      ),
 +    );
-+    return FloatingActionEntrance(child: button);
++    return FloatingActionEntrance(
++      child: PressBounce(
++        trigger: isStart,
++        enabled: _settled,
++        child: button,
++      ),
++    );
 +  }
 +}
 diff --git a/lib/views/proxies/proxies.dart b/lib/views/proxies/proxies.dart
-index f2426f4..681f4d2 100644
+index f2426f4..ad0f8ae 100644
 --- a/lib/views/proxies/proxies.dart
 +++ b/lib/views/proxies/proxies.dart
-@@ -113,16 +113,42 @@ class _ProxiesViewState extends ConsumerState<ProxiesView> {
+@@ -2,6 +2,7 @@ import 'package:fl_clash/common/common.dart';
+ import 'package:fl_clash/enum/enum.dart';
+ import 'package:fl_clash/models/models.dart';
+ import 'package:fl_clash/providers/providers.dart';
++import 'package:fl_clash/ui/floating_action.dart';
+ import 'package:fl_clash/ui/icons/icons.dart';
+ import 'package:fl_clash/views/proxies/list.dart';
+ import 'package:fl_clash/widgets/widgets.dart';
+@@ -113,16 +114,47 @@ class _ProxiesViewState extends ConsumerState<ProxiesView> {
      ];
    }
  
@@ -361,19 +438,24 @@ index f2426f4..681f4d2 100644
 +    }
 +    final isDelayTesting = ref.watch(currentGroupDelayTestingProvider);
 +    final label = context.appLocalizations.delayTest;
-+    return FloatingActionButton.extended(
-+      heroTag: null,
-+      tooltip: label,
-+      onPressed: isDelayTesting ? null : _delayTestCurrentGroup,
-+      icon: isDelayTesting
-+          ? SizedBox.square(
-+              dimension: 24,
-+              child: CommonCircleLoading(color: context.colorScheme.onPrimary),
-+            )
-+          : const GlyphIcon(AppGlyphs.bolt, fill: 1),
-+      label: Text(label),
-+      backgroundColor: context.colorScheme.primary,
-+      foregroundColor: context.colorScheme.onPrimary,
++    return PressBounce(
++      trigger: isDelayTesting,
++      child: FloatingActionButton.extended(
++        heroTag: null,
++        tooltip: label,
++        onPressed: isDelayTesting ? null : _delayTestCurrentGroup,
++        icon: isDelayTesting
++            ? SizedBox.square(
++                dimension: 24,
++                child: CommonCircleLoading(
++                  color: context.colorScheme.onPrimary,
++                ),
++              )
++            : const GlyphIcon(AppGlyphs.bolt, fill: 1),
++        label: Text(label),
++        backgroundColor: context.colorScheme.primary,
++        foregroundColor: context.colorScheme.onPrimary,
++      ),
 +    );
 +  }
 +
@@ -393,7 +475,7 @@ index f2426f4..681f4d2 100644
        tooltip: context.appLocalizations.delayTest,
        isLoading: isDelayTesting,
      );
-@@ -160,6 +186,7 @@ class _ProxiesViewState extends ConsumerState<ProxiesView> {
+@@ -160,6 +192,7 @@ class _ProxiesViewState extends ConsumerState<ProxiesView> {
        isLoading: isLoading,
        resizeToAvoidBottomInset: false,
        primaryAction: primaryAction,
