@@ -110,7 +110,7 @@ jobs:
           set -euo pipefail
 
           SOURCE="../custom-files/starry/xml"
-          TARGET="android/app/src/main/res/drawable"
+          TARGET="android/app/src/main/res"
 
           test -d "$SOURCE" || {
             echo "::error::Custom XML directory not found: $SOURCE"
@@ -118,25 +118,41 @@ jobs:
           }
 
           test -d "$TARGET" || {
-            echo "::error::Upstream drawable directory not found: $TARGET"
+            echo "::error::Upstream res directory not found: $TARGET"
             exit 1
           }
 
           XML_COUNT=0
 
+          # Files at the root of starry/xml land in res/drawable, which keeps the
+          # existing drop-in rule. Anything in a sub-directory mirrors that
+          # directory name under res/, so starry/xml/mipmap-anydpi-v26/x.xml
+          # becomes res/mipmap-anydpi-v26/x.xml without touching this script.
           while IFS= read -r -d '' file; do
-            filename=$(basename "$file")
+            rel="${file#"$SOURCE"/}"
+
+            case "$rel" in
+              *..*) echo "::error::Unsafe resource path: $rel"; exit 1 ;;
+            esac
+
+            filename=$(basename "$rel")
 
             if ! [[ "$filename" =~ ^[a-z0-9_]+\.xml$ ]]; then
               echo "::error::Invalid Android resource filename: $filename"
               exit 1
             fi
 
-            cp -f "$file" "$TARGET/$filename"
-            echo "Restored XML: $filename"
+            case "$rel" in
+              */*) dest_dir="$TARGET/$(dirname "$rel")" ;;
+              *) dest_dir="$TARGET/drawable" ;;
+            esac
+
+            mkdir -p "$dest_dir"
+            cp -f "$file" "$dest_dir/$filename"
+            echo "Restored XML: $rel -> ${dest_dir#"$TARGET"/}"
             XML_COUNT=$((XML_COUNT + 1))
           done < <(
-            find "$SOURCE" -maxdepth 1 -type f -name '*.xml' -print0
+            find "$SOURCE" -type f -name '*.xml' -print0
           )
 
           echo "Restored $XML_COUNT custom XML file(s)."
@@ -404,6 +420,16 @@ jobs:
 
           grep -F 'applicationId =' "$FILE"
 
+          # split-per-abi is disabled in the build step, so without an explicit
+          # filter the universal APK also carries the armeabi-v7a and x86_64
+          # copies of AAR-provided native libraries. libbarhopper_v3.so alone
+          # accounts for ~4 MB of dead weight in the arm64-v8a package.
+          sed -i \
+            '/applicationId = "com.follow.clash.starry"/a\        ndk {\n            abiFilters += listOf("arm64-v8a")\n        }' \
+            "$FILE"
+
+          grep -A3 -F 'ndk {' "$FILE"
+
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
         with:
@@ -591,6 +617,17 @@ jobs:
 
           if [[ "$ACTUAL_NAME" != "$EXPECTED_VERSION_NAME" ]]; then
             echo "::error::Unexpected versionName: $ACTUAL_NAME (expected $EXPECTED_VERSION_NAME)"
+            exit 1
+          fi
+
+          APK_ABIS=$(
+            "$APKANALYZER" files list "$APK" \
+              | grep -o '^/lib/[^/]*' | cut -d/ -f3 | sort -u | tr '\n' ' '
+          )
+          echo "APK ABIs: $APK_ABIS"
+
+          if [[ "$APK_ABIS" != "arm64-v8a " ]]; then
+            echo "::error::Unexpected ABIs in APK: $APK_ABIS (expected arm64-v8a only)"
             exit 1
           fi
 
