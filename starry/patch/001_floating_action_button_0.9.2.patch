@@ -3,27 +3,28 @@ new file mode 100644
 index 0000000..71f9dcf
 --- /dev/null
 +++ b/lib/ui/floating_action.dart
-@@ -0,0 +1,41 @@
+@@ -0,0 +1,42 @@
 +import 'package:fl_clash/ui/context.dart';
 +import 'package:flutter/foundation.dart' show clampDouble;
 +import 'package:material_ui/material_ui.dart';
 +
 +/// Fades a corner button in when its page opens, then lets it settle with a
-+/// small rebound. The width and the icon morph belong to the button itself; the
-+/// scale here only has to make that landing read as a landing.
++/// rebound. The width and the icon morph belong to the button itself; the scale
++/// here only has to make that landing read as a landing.
 +class FloatingActionEntrance extends StatelessWidget {
 +  const FloatingActionEntrance({super.key, required this.child});
 +
 +  final Widget child;
 +
-+  static const _duration = Duration(milliseconds: 520);
++  static const _duration = Duration(milliseconds: 560);
 +
-+  /// 0.90 up to 1.03, then back to 1.00. The overshoot mirrors the bar buttons,
-+  /// which land on `Curves.easeOutBack`, so the corner does not feel foreign.
++  /// 0.86 up to 1.055, dips to 0.995, then rests at 1.00. The overshoot lands
++  /// where the bar buttons do (`Curves.easeOutBack`), and the dip is what makes
++  /// it read as a rebound rather than a stop.
 +  static double _scaleAt(double t) {
-+    const peakAt = 0.68;
-+    const peak = 1.03;
-+    const start = 0.90;
++    const peakAt = 0.60;
++    const peak = 1.055;
++    const start = 0.86;
 +    if (t <= peakAt) {
 +      return start +
 +          (peak - start) * Curves.easeOutCubic.transform(t / peakAt);
