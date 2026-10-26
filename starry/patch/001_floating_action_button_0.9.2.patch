@@ -1,35 +1,31 @@
 diff --git a/lib/ui/floating_action.dart b/lib/ui/floating_action.dart
 new file mode 100644
-index 0000000..71f9dcf
+index 0000000..d33969e
 --- /dev/null
 +++ b/lib/ui/floating_action.dart
-@@ -0,0 +1,30 @@
+@@ -0,0 +1,26 @@
 +import 'package:fl_clash/ui/context.dart';
-+import 'package:flutter/foundation.dart' show clampDouble;
 +import 'package:material_ui/material_ui.dart';
 +
-+/// Brings a corner button in when its page opens: it waits a beat for the
-+/// page, then rises and settles into place with a small overshoot.
++/// Brings a corner button in when its page opens. It is there from the first
++/// frame, a little low and a little small, and settles into place.
 +class FloatingActionEntrance extends StatelessWidget {
 +  const FloatingActionEntrance({super.key, required this.child});
 +
 +  final Widget child;
 +
-+  static const _duration = Duration(milliseconds: 760);
++  static const _duration = Duration(milliseconds: 420);
 +
 +  @override
 +  Widget build(BuildContext context) {
 +    return TweenAnimationBuilder<double>(
 +      tween: Tween(begin: 0, end: 1),
 +      duration: context.motionDuration(_duration),
-+      curve: const Interval(0.3, 1, curve: Curves.easeOutBack),
++      curve: Curves.easeOutCubic,
 +      child: child,
-+      builder: (_, t, child) => Opacity(
-+        opacity: clampDouble(t, 0, 1),
-+        child: Transform.translate(
-+          offset: Offset(0, 24 * (1 - t)),
-+          child: Transform.scale(scale: 0.7 + 0.3 * t, child: child),
-+        ),
++      builder: (_, t, child) => Transform.translate(
++        offset: Offset(0, 14 * (1 - t)),
++        child: Transform.scale(scale: 0.86 + 0.14 * t, child: child),
 +      ),
 +    );
 +  }
@@ -137,10 +133,10 @@ index 8842d6b..ab65712 100644
                glyph: AppGlyphs.check,
 diff --git a/lib/views/dashboard/widgets/start_fab.dart b/lib/views/dashboard/widgets/start_fab.dart
 new file mode 100644
-index 0000000..fbc367e
+index 0000000..d88cbae
 --- /dev/null
 +++ b/lib/views/dashboard/widgets/start_fab.dart
-@@ -0,0 +1,134 @@
+@@ -0,0 +1,139 @@
 +import 'dart:ui' show FontFeature;
 +
 +import 'package:fl_clash/common/common.dart';
@@ -237,7 +233,12 @@ index 0000000..fbc367e
 +                  // The time grows out of the icon as the button widens, and
 +                  // folds back into it as the button narrows.
 +                  AnimatedSwitcher(
-+                    duration: context.motionDuration(settled ? _widenDuration : Duration.zero),
++                    // While the opening state settles, each flip gets a fresh
++                    // switcher that simply shows it. A zero duration would
++                    // stay on the time that flip brought in, and fold it away
++                    // at once the first time the button is stopped.
++                    key: ValueKey(settled ? 'live' : 'opening-$isStart'),
++                    duration: context.motionDuration(_widenDuration),
 +                    switchInCurve: Curves.easeOutCubic,
 +                    switchOutCurve: Curves.easeInCubic,
 +                    transitionBuilder: (child, animation) => SizeTransition(
