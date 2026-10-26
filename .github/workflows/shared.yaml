@@ -428,7 +428,20 @@ jobs:
             '/applicationId = "com.follow.clash.starry"/a\        ndk {\n            abiFilters += listOf("arm64-v8a")\n        }' \
             "$FILE"
 
-          grep -A3 -F 'ndk {' "$FILE"
+          # AGP 9 no longer applies defaultConfig.ndk.abiFilters to prebuilt
+# jniLibs, so abiFilters above is kept only for the native build.
+# Filtering has to happen at packaging time instead.
+grep -Fq 'useLegacyPackaging = true' "$FILE" || {
+  echo "::error::Expected useLegacyPackaging setting was not found."
+  exit 1
+}
+
+sed -i \
+  '/useLegacyPackaging = true/a\            excludes += listOf("lib/armeabi-v7a/**", "lib/x86_64/**")' \
+  "$FILE"
+
+grep -A3 -F 'ndk {' "$FILE"
+grep -A4 -F 'packaging {' "$FILE"
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
