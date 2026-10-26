@@ -190,38 +190,53 @@ jobs:
           echo "Restored $IMAGE_COUNT custom image/resource file(s)."
 
       - name: Apply custom patches
-        working-directory: upstream
-        shell: bash
-        run: |
-          set -euo pipefail
+  working-directory: upstream
+  shell: bash
+  run: |
+    set -euo pipefail
 
-          PATCH_DIR="../custom-files/starry/patch"
+    PATCH_DIR="../custom-files/starry/patch"
 
-          test -d "$PATCH_DIR" || {
-            echo "::error::Patch directory not found: $PATCH_DIR"
-            exit 1
-          }
+    test -d "$PATCH_DIR" || {
+      echo "::error::Patch directory not found: $PATCH_DIR"
+      exit 1
+    }
 
-          shopt -s nullglob
-          PATCHES=("$PATCH_DIR"/*.patch)
+    shopt -s nullglob
+    PATCHES=("$PATCH_DIR"/*.patch)
 
-          if (( ${#PATCHES[@]} == 0 )); then
-            echo "No .patch files found. Skipping custom patches."
-          else
-            for patch in "${PATCHES[@]}"; do
-              echo "Checking patch: $(basename "$patch")"
+    if (( ${#PATCHES[@]} == 0 )); then
+      echo "No .patch files found. Skipping custom patches."
+    else
+      for patch in "${PATCHES[@]}"; do
+        # A patch must end with exactly one newline. Editors drop the
+        # last one or leave a blank line behind, and git then reports
+        # "corrupt patch" on the final line.
+        python3 - "$patch" <<'PY'
+    import pathlib
+    import sys
 
-              if ! git apply --check "$patch"; then
-                echo "::error::Patch cannot be applied: $(basename "$patch")"
-                exit 1
-              fi
+    path = pathlib.Path(sys.argv[1])
+    raw = path.read_text()
+    fixed = raw.rstrip("\n") + "\n"
+    if fixed != raw:
+        path.write_text(fixed)
+        print(f"normalised trailing newlines: {path.name}")
+    PY
 
-              git apply "$patch"
-              echo "Applied patch: $(basename "$patch")"
-            done
+        echo "Checking patch: $(basename "$patch")"
 
-            echo "Applied ${#PATCHES[@]} custom patch(es)."
-          fi
+        if ! git apply --check "$patch"; then
+          echo "::error::Patch cannot be applied: $(basename "$patch")"
+          exit 1
+        fi
+
+        git apply "$patch"
+        echo "Applied patch: $(basename "$patch")"
+      done
+
+      echo "Applied ${#PATCHES[@]} custom patch(es)."
+    fi
 
       - name: Read upstream toolchain versions
         id: toolchain
