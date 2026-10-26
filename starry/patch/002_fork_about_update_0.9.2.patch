@@ -156,7 +156,7 @@ index cf7ca86..34a1d38 100644
        );
        return response.data!;
 @@ -111,7 +155,7 @@ class Request {
-       ),
+       );
      }
      final response = await dio.get<void>(
 -      'https://github.com/$repository/releases/latest',
