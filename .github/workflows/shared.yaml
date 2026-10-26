@@ -100,6 +100,7 @@ jobs:
             starry/xml
             starry/images
             starry/patch
+            starry/script
             starry/txt/versioncode.txt
           sparse-checkout-cone-mode: false
 
@@ -420,28 +421,18 @@ jobs:
 
           grep -F 'applicationId =' "$FILE"
 
-          # split-per-abi is disabled in the build step, so without an explicit
-          # filter the universal APK also carries the armeabi-v7a and x86_64
-          # copies of AAR-provided native libraries. libbarhopper_v3.so alone
-          # accounts for ~4 MB of dead weight in the arm64-v8a package.
+          # Kept for the externalNativeBuild path; AGP 9 ignores abiFilters for
+          # prebuilt jniLibs, so the real filtering lives in the next step.
           sed -i \
             '/applicationId = "com.follow.clash.starry"/a\        ndk {\n            abiFilters += listOf("arm64-v8a")\n        }' \
             "$FILE"
 
-          # AGP 9 no longer applies defaultConfig.ndk.abiFilters to prebuilt
-# jniLibs, so abiFilters above is kept only for the native build.
-# Filtering has to happen at packaging time instead.
-grep -Fq 'useLegacyPackaging = true' "$FILE" || {
-  echo "::error::Expected useLegacyPackaging setting was not found."
-  exit 1
-}
+          grep -A3 -F 'ndk {' "$FILE"
 
-sed -i \
-  '/useLegacyPackaging = true/a\            excludes += listOf("lib/armeabi-v7a/**", "lib/x86_64/**")' \
-  "$FILE"
-
-grep -A3 -F 'ndk {' "$FILE"
-grep -A4 -F 'packaging {' "$FILE"
+      - name: Filter ABI at packaging time
+        working-directory: upstream
+        shell: bash
+        run: bash ../custom-files/starry/script/abi_filter.sh
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
@@ -635,7 +626,7 @@ grep -A4 -F 'packaging {' "$FILE"
 
           APK_ABIS=$(
             "$APKANALYZER" files list "$APK" \
-              | grep -o '^/lib/[^/]*' | cut -d/ -f3 | sort -u | tr '\n' ' '
+              | grep -oE 'lib/[^/]+/' | cut -d/ -f2 | sort -u | tr '\n' ' '
           )
           echo "APK ABIs: $APK_ABIS"
 
