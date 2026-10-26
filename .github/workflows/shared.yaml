@@ -100,7 +100,6 @@ jobs:
             starry/xml
             starry/images
             starry/patch
-            starry/script
             starry/txt/versioncode.txt
           sparse-checkout-cone-mode: false
 
@@ -421,8 +420,10 @@ jobs:
 
           grep -F 'applicationId =' "$FILE"
 
-          # Kept for the externalNativeBuild path; AGP 9 ignores abiFilters for
-          # prebuilt jniLibs, so the real filtering lives in the next step.
+          # split-per-abi is disabled in the build step, so without an explicit
+          # filter the universal APK also carries the armeabi-v7a and x86_64
+          # copies of AAR-provided native libraries. libbarhopper_v3.so alone
+          # accounts for ~4 MB of dead weight in the arm64-v8a package.
           sed -i \
             '/applicationId = "com.follow.clash.starry"/a\        ndk {\n            abiFilters += listOf("arm64-v8a")\n        }' \
             "$FILE"
@@ -432,7 +433,32 @@ jobs:
       - name: Filter ABI at packaging time
         working-directory: upstream
         shell: bash
-        run: bash ../custom-files/starry/script/abi_filter.sh
+        run: |
+          set -euo pipefail
+
+          FILE="android/app/build.gradle.kts"
+
+          test -f "$FILE" || {
+            echo "::error::Gradle file not found: $FILE"
+            exit 1
+          }
+
+          grep -Fq 'useLegacyPackaging = true' "$FILE" || {
+            echo "::error::useLegacyPackaging not found in $FILE"
+            exit 1
+          }
+
+          for ABI in armeabi-v7a x86_64; do
+            if grep -Fq "lib/$ABI" "$FILE"; then
+              echo "already excluded: $ABI"
+              continue
+            fi
+            sed -i "/useLegacyPackaging = true/a\\            excludes.add(\"lib/$ABI/**\")" "$FILE"
+            echo "excluded: $ABI"
+          done
+
+          echo "--- packaging block ---"
+          grep -A5 -F 'packaging {' "$FILE"
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
