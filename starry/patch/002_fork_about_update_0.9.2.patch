@@ -80,10 +80,10 @@ index 5ae7e94..0f1c520 100644
  
  const releaseNotesBeginMarker = '<!-- flclash:changelog:begin -->';
 diff --git a/lib/common/request.dart b/lib/common/request.dart
-index cf7ca86..f0790ad 100644
+index cf7ca86..34a1d38 100644
 --- a/lib/common/request.dart
 +++ b/lib/common/request.dart
-@@ -86,13 +86,44 @@ class Request {
+@@ -86,13 +86,57 @@ class Request {
    }
  
    /// Null when this build is current; throws when GitHub cannot be asked.
@@ -98,7 +98,20 @@ index cf7ca86..f0790ad 100644
 -        compareVersions(remoteVersion.replaceAll('v', ''), version) > 0;
 -    return hasUpdate ? release : null;
 +    final includePrerelease = version.contains('-');
-+    final releases = await releasesList();
++
++    final List<Map<String, dynamic>> releases;
++    try {
++      releases = await releasesList();
++    } on Object {
++      // The list endpoint needs hourly quota; once it is spent the release
++      // page redirect still answers. That path only knows the stable channel,
++      // so a prerelease build simply sees nothing newer than itself.
++      final release = await latestRelease();
++      final tag = release['tag_name'];
++      if (tag is! String) return null;
++      final remote = tag.replaceAll('v', '');
++      return compareVersions(remote, version) > 0 ? release : null;
++    }
 +
 +    Map<String, dynamic>? newest;
 +    String? newestVersion;
@@ -133,7 +146,7 @@ index cf7ca86..f0790ad 100644
    }
  
    /// The release page redirect still answers once the hourly API quota is spent.
-@@ -100,7 +131,7 @@ class Request {
+@@ -100,7 +144,7 @@ class Request {
    Future<Map<String, dynamic>> latestRelease() async {
      try {
        final response = await dio.get<Map<String, dynamic>>(
@@ -142,8 +155,8 @@ index cf7ca86..f0790ad 100644
          options: Options(responseType: ResponseType.json),
        );
        return response.data!;
-@@ -111,7 +142,7 @@ class Request {
-       );
+@@ -111,7 +155,7 @@ class Request {
+       ),
      }
      final response = await dio.get<void>(
 -      'https://github.com/$repository/releases/latest',
