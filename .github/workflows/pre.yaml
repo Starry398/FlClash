@@ -20,6 +20,7 @@ jobs:
       source_tag: ${{ steps.version.outputs.source_tag }}
       version_name: ${{ steps.version.outputs.version_name }}
       release_tag: ${{ steps.version.outputs.release_tag }}
+      release_title: ${{ steps.version.outputs.release_title }}
 
     steps:
       - name: Calculate next pre-release version
