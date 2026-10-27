@@ -10,7 +10,7 @@ permissions:
   actions: read
 
 concurrency:
-  group: flclash-sync
+  group: flclash-release
   cancel-in-progress: false
 
 env:
