@@ -7,6 +7,10 @@ name: Check
 on:
   workflow_dispatch:
 
+  push:
+    paths:
+      - "starry/patch/**"
+      - ".github/workflows/check.yaml"
 permissions:
   contents: read
 
