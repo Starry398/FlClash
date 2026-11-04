@@ -739,11 +739,18 @@ jobs:
 
           echo "Final APK: $DEST"
 
+          # The in-app updater checks the download against this file. It splits
+          # each line on a single space, so write one space and no ./ prefix.
+          NAME=$(basename "$DEST")
+          HASH=$(sha256sum "$DEST" | cut -d' ' -f1)
+          printf '%s %s\n' "$HASH" "$NAME" > dist/SHA256SUMS
+          cat dist/SHA256SUMS
+
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
           name: FlClash-Android-ARM64-${{ inputs.release_tag }}
-          path: upstream/dist/FlClash-*-android-arm64-v8a.apk
+          path: upstream/dist/*
           if-no-files-found: error
           retention-days: 30
 
@@ -776,6 +783,7 @@ jobs:
           ARGS=(
             "$RELEASE_TAG"
             "${APK_FILES[0]}"
+            "dist/SHA256SUMS"
             --repo "$REPOSITORY"
             --title "$RELEASE_TITLE"
             --generate-notes
