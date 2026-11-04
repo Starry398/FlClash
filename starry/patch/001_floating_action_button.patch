@@ -1,5 +1,5 @@
 diff --git a/lib/ui/scaffold/scaffold.dart b/lib/ui/scaffold/scaffold.dart
-index d06e41b..2469693 100644
+index d06e41b..a8f7545 100644
 --- a/lib/ui/scaffold/scaffold.dart
 +++ b/lib/ui/scaffold/scaffold.dart
 @@ -45,6 +45,13 @@ typedef AppBarSearchStateBuilder =
@@ -7,11 +7,11 @@ index d06e41b..2469693 100644
  
  class Scaffold extends StatefulWidget {
 +  /// Room the corner slot leaves from the page edge.
-+  static const double _floatingActionMargin = 24;
++  static const double _floatingActionMargin = 32;
 +
 +  /// Room the body keeps at its foot for the corner slot: the button itself
 +  /// plus the margin below it, so the last row can scroll clear of it.
-+  static const double _floatingActionReserve = 80;
++  static const double _floatingActionReserve = 88;
 +
    final Widget body;
    final Color? backgroundColor;
@@ -94,10 +94,10 @@ index 55d2c9b..adc726a 100644
                glyph: AppGlyphs.check,
 diff --git a/lib/views/dashboard/widgets/start_fab.dart b/lib/views/dashboard/widgets/start_fab.dart
 new file mode 100644
-index 0000000..952c45a
+index 0000000..e3cb8e0
 --- /dev/null
 +++ b/lib/views/dashboard/widgets/start_fab.dart
-@@ -0,0 +1,235 @@
+@@ -0,0 +1,227 @@
 +import 'dart:async';
 +import 'dart:ui' show FontFeature;
 +
@@ -112,10 +112,9 @@ index 0000000..952c45a
 +/// plain play button; running, it widens to a pause button that carries the
 +/// run time.
 +///
-+/// It fades in and then unrolls. Editing the page runs exactly that motion
-+/// backwards — the time folds back into the icon, the glyph turns from pause
-+/// back to play, and only then does the whole thing fade out — so the button
-+/// never simply vanishes and never replays its entrance when the edit ends.
++/// It fades and unrolls in one motion. Editing the page runs the same thing
++/// backwards — fade, width, glyph and run time all move together — so the
++/// button never simply vanishes and never replays its entrance after an edit.
 +class StartFab extends ConsumerStatefulWidget {
 +  const StartFab({super.key, this.collapsed = false});
 +
@@ -142,7 +141,6 @@ index 0000000..952c45a
 +  );
 +
 +  Timer? _settleTimer;
-+  Timer? _stepTimer;
 +  bool _settled = false;
 +
 +  /// False while the width is rolled up: the run time only shows once the
@@ -156,7 +154,7 @@ index 0000000..952c45a
 +    WidgetsBinding.instance.addPostFrameCallback((_) {
 +      if (!mounted) return;
 +      if (widget.collapsed) return;
-+      _expand();
++      _show();
 +    });
 +    // settled used to be worked out inside build, so a page that never rebuilt
 +    // kept the transitions at zero duration and the first tap jumped.
@@ -171,42 +169,36 @@ index 0000000..952c45a
 +    super.didUpdateWidget(oldWidget);
 +    if (widget.collapsed == oldWidget.collapsed) return;
 +    if (widget.collapsed) {
-+      _collapse();
++      _hide();
 +    } else {
-+      _expand();
++      _show();
 +    }
 +  }
 +
 +  @override
 +  void dispose() {
 +    _settleTimer?.cancel();
-+    _stepTimer?.cancel();
 +    _morph.dispose();
 +    super.dispose();
 +  }
 +
-+  /// Fade in, then unroll.
-+  void _expand() {
-+    _stepTimer?.cancel();
-+    setState(() => _visible = true);
-+    _stepTimer = Timer(_fadeDuration, () {
-+      if (!mounted) return;
-+      setState(() => _entered = true);
-+      if (ref.read(isStartProvider)) {
-+        _morph.forward();
-+      }
++  /// Fades in and unrolls at the same time; [_hide] runs it all back.
++  void _show() {
++    setState(() {
++      _visible = true;
++      _entered = true;
 +    });
++    if (ref.read(isStartProvider)) {
++      _morph.forward();
++    }
 +  }
 +
-+  /// Roll up, then fade out — the same two steps in the opposite order.
-+  void _collapse() {
-+    _stepTimer?.cancel();
-+    setState(() => _entered = false);
-+    _morph.reverse();
-+    _stepTimer = Timer(_widenDuration, () {
-+      if (!mounted) return;
-+      setState(() => _visible = false);
++  void _hide() {
++    setState(() {
++      _visible = false;
++      _entered = false;
 +    });
++    _morph.reverse();
 +  }
 +
 +  Duration get _switchDuration => context.motionDuration(_widenDuration);
@@ -326,7 +318,7 @@ index 0000000..952c45a
 +      ignoring: widget.collapsed,
 +      child: AnimatedOpacity(
 +        opacity: _visible ? 1 : 0,
-+        duration: _fadeDuration,
++        duration: _widenDuration,
 +        curve: Curves.easeOut,
 +        child: button,
 +      ),
