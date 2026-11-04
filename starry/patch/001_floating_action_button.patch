@@ -142,7 +142,7 @@ index 0000000..48550ca
 +  }
 +}
 diff --git a/lib/views/proxies/proxies.dart b/lib/views/proxies/proxies.dart
-index 361107e..cf06bd0 100644
+index 361107e..ebdfd63 100644
 --- a/lib/views/proxies/proxies.dart
 +++ b/lib/views/proxies/proxies.dart
 @@ -7,6 +7,7 @@ import 'package:fl_clash/views/proxies/list.dart';
