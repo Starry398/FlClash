@@ -715,7 +715,22 @@ jobs:
           fi
 
           git commit -m "chore: update versionCode to $NEW_VERSION_CODE"
-          git push origin "HEAD:${DEFAULT_BRANCH}"
+
+          # GitHub occasionally answers a push with a 500. The counter has to
+          # land, or the next build hands out a versionCode that cannot install
+          # over this APK, so retry rather than failing the whole release.
+          for attempt in 1 2 3 4 5; do
+            if git push origin "HEAD:${DEFAULT_BRANCH}"; then
+              echo "Counter pushed on attempt $attempt"
+              exit 0
+            fi
+
+            echo "::warning::Counter push failed (attempt $attempt)"
+            sleep $((attempt * 10))
+          done
+
+          echo "::error::Could not push the version counter"
+          exit 1
 
       - name: Rename APK
         working-directory: upstream
