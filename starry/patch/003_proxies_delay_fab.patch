@@ -1,0 +1,95 @@
+diff --git a/lib/views/proxies/proxies.dart b/lib/views/proxies/proxies.dart
+index 361107e..9c2d4d1 100644
+--- a/lib/views/proxies/proxies.dart
++++ b/lib/views/proxies/proxies.dart
+@@ -7,6 +7,7 @@ import 'package:fl_clash/views/proxies/list.dart';
+ import 'package:fl_clash/widgets/widgets.dart';
+ import 'package:flutter/widgets.dart';
+ import 'package:flutter_riverpod/flutter_riverpod.dart';
++import 'package:prism_ui/prism_ui.dart';
+ 
+ import 'tab.dart';
+ 
+@@ -113,16 +114,70 @@ class _ProxiesViewState extends ConsumerState<ProxiesView> {
+     ];
+   }
+ 
++  void _delayTestCurrentGroup() {
++    _proxiesTabKey.currentState?.delayTestCurrentGroup();
++  }
++
++  /// The delay test of the current group, in the corner of the page. It keeps
++  /// its label: the bolt alone was ambiguous next to the cards behind it.
++  Widget? _buildFloatingAction() {
++    if (!_isTab || widget.picker) {
++      return null;
++    }
++    final isDelayTesting = ref.watch(currentGroupDelayTestingProvider);
++    final colorScheme = context.colorScheme;
++    final label = context.appLocalizations.delayTest;
++    return Surface(
++      color: colorScheme.primary,
++      shape: AppShape.md,
++      elevation: 6,
++      shadowColor: colorScheme.shadow,
++      clipBehavior: Clip.antiAlias,
++      child: GestureDetector(
++        behavior: HitTestBehavior.opaque,
++        onTap: isDelayTesting ? null : _delayTestCurrentGroup,
++        child: ConstrainedBox(
++          constraints: const BoxConstraints(minHeight: 56),
++          child: Padding(
++            padding: const EdgeInsets.symmetric(horizontal: 20),
++            child: Row(
++              mainAxisSize: MainAxisSize.min,
++              mainAxisAlignment: MainAxisAlignment.center,
++              children: [
++                isDelayTesting
++                    ? SizedBox.square(
++                        dimension: 20,
++                        child: ActivityIndicator(color: colorScheme.onPrimary),
++                      )
++                    : GlyphIcon(
++                        AppGlyphs.bolt,
++                        color: colorScheme.onPrimary,
++                        fill: 1,
++                      ),
++                const SizedBox(width: 8),
++                Text(
++                  label,
++                  style: AppTextStyle.subheadline
++                      .of(context)
++                      .copyWith(color: colorScheme.onPrimary),
++                ),
++              ],
++            ),
++          ),
++        ),
++      ),
++    );
++  }
++
+   IconButtonData? _buildPrimaryAction() {
+-    if (!_isTab) {
++    // A page has the corner button; a sheet keeps the bolt in its bar.
++    if (!_isTab || !widget.picker) {
+       return null;
+     }
+     final isDelayTesting = ref.watch(currentGroupDelayTestingProvider);
+     return IconButtonData(
+       glyph: AppGlyphs.bolt,
+-      onPressed: () {
+-        _proxiesTabKey.currentState?.delayTestCurrentGroup();
+-      },
++      onPressed: _delayTestCurrentGroup,
+       tooltip: context.appLocalizations.delayTest,
+       isLoading: isDelayTesting,
+     );
+@@ -160,6 +215,7 @@ class _ProxiesViewState extends ConsumerState<ProxiesView> {
+       isLoading: isLoading,
+       resizeToAvoidBottomInset: false,
+       primaryAction: primaryAction,
++      floatingActionButton: _buildFloatingAction(),
+       searchActions: [?primaryAction],
+       iconActions: [
+         if (_isTab && !picker)
