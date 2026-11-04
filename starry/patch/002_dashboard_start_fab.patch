@@ -1,0 +1,253 @@
+diff --git a/lib/views/dashboard/dashboard.dart b/lib/views/dashboard/dashboard.dart
+index 55d2c9b..adc726a 100644
+--- a/lib/views/dashboard/dashboard.dart
++++ b/lib/views/dashboard/dashboard.dart
+@@ -15,6 +15,7 @@ import 'layout.dart';
+ import 'style.dart';
+ import 'widget_registry.dart';
+ import 'widgets/core_status_button.dart';
++import 'widgets/start_fab.dart';
+ import 'widgets/widgets.dart';
+ 
+ // Narrower columns leave a pair of service cells too tight for a status, so
+@@ -67,6 +68,7 @@ class _DashboardViewState extends ConsumerState<DashboardView> {
+         if (!editable) const UpdateStatusButton(),
+         if (!editing && coreLib == null) const CoreStatusButton(),
+       ],
++      floatingActionButton: editable ? StartFab(collapsed: editing) : null,
+       confirmationAction: editing
+           ? IconButtonData(
+               glyph: AppGlyphs.check,
+diff --git a/lib/views/dashboard/widgets/start_fab.dart b/lib/views/dashboard/widgets/start_fab.dart
+new file mode 100644
+index 0000000..e3cb8e0
+--- /dev/null
++++ b/lib/views/dashboard/widgets/start_fab.dart
+@@ -0,0 +1,227 @@
++import 'dart:async';
++import 'dart:ui' show FontFeature;
++
++import 'package:fl_clash/common/common.dart';
++import 'package:fl_clash/providers/providers.dart';
++import 'package:fl_clash/ui/icons/icons.dart';
++import 'package:flutter/widgets.dart';
++import 'package:flutter_riverpod/flutter_riverpod.dart';
++import 'package:prism_ui/prism_ui.dart';
++
++/// Starts and stops the tunnel from the corner of the page. Stopped, it is a
++/// plain play button; running, it widens to a pause button that carries the
++/// run time.
++///
++/// It fades and unrolls in one motion. Editing the page runs the same thing
++/// backwards — fade, width, glyph and run time all move together — so the
++/// button never simply vanishes and never replays its entrance after an edit.
++class StartFab extends ConsumerStatefulWidget {
++  const StartFab({super.key, this.collapsed = false});
++
++  /// True while the page is being edited.
++  final bool collapsed;
++
++  @override
++  ConsumerState<StartFab> createState() => _StartFabState();
++}
++
++class _StartFabState extends ConsumerState<StartFab>
++    with SingleTickerProviderStateMixin {
++  static const _size = 56.0;
++  static const _morphDuration = Duration(milliseconds: 360);
++  static const _widenDuration = Duration(milliseconds: 340);
++  static const _fadeDuration = Duration(milliseconds: 160);
++  static const _settleTime = Duration(milliseconds: 1200);
++
++  /// 0 is play, 1 is pause. Driven directly instead of through a tween so the
++  /// collapse can replay the exact morph the start action uses, reversed.
++  late final AnimationController _morph = AnimationController(
++    vsync: this,
++    duration: _widenDuration,
++  );
++
++  Timer? _settleTimer;
++  bool _settled = false;
++
++  /// False while the width is rolled up: the run time only shows once the
++  /// button has finished unrolling, so the first frame starts narrow.
++  bool _entered = false;
++  bool _visible = false;
++
++  @override
++  void initState() {
++    super.initState();
++    WidgetsBinding.instance.addPostFrameCallback((_) {
++      if (!mounted) return;
++      if (widget.collapsed) return;
++      _show();
++    });
++    // settled used to be worked out inside build, so a page that never rebuilt
++    // kept the transitions at zero duration and the first tap jumped.
++    _settleTimer = Timer(_settleTime, () {
++      if (!mounted) return;
++      setState(() => _settled = true);
++    });
++  }
++
++  @override
++  void didUpdateWidget(StartFab oldWidget) {
++    super.didUpdateWidget(oldWidget);
++    if (widget.collapsed == oldWidget.collapsed) return;
++    if (widget.collapsed) {
++      _hide();
++    } else {
++      _show();
++    }
++  }
++
++  @override
++  void dispose() {
++    _settleTimer?.cancel();
++    _morph.dispose();
++    super.dispose();
++  }
++
++  /// Fades in and unrolls at the same time; [_hide] runs it all back.
++  void _show() {
++    setState(() {
++      _visible = true;
++      _entered = true;
++    });
++    if (ref.read(isStartProvider)) {
++      _morph.forward();
++    }
++  }
++
++  void _hide() {
++    setState(() {
++      _visible = false;
++      _entered = false;
++    });
++    _morph.reverse();
++  }
++
++  Duration get _switchDuration => context.motionDuration(_widenDuration);
++
++  @override
++  Widget build(BuildContext context) {
++    final colorScheme = context.colorScheme;
++    final appLocalizations = context.appLocalizations;
++    final hasProfile = ref.watch(
++      profilesProvider.select((state) => state.isNotEmpty),
++    );
++    final isStart = ref.watch(isStartProvider);
++    final suspended = isStart && ref.watch(suspendProvider);
++    final runTime = isStart ? ref.watch(runTimeProvider) : null;
++
++    ref.listen(isStartProvider, (_, next) {
++      if (!_entered) return;
++      _morph.animateTo(
++        next ? 1 : 0,
++        duration: _settled
++            ? context.motionDuration(_morphDuration)
++            : _morph.isAnimating
++            ? _fadeDuration
++            : Duration.zero,
++      );
++    });
++
++    final ink = hasProfile
++        ? colorScheme.onPrimary
++        : colorScheme.onSurface.withValues(alpha: 0.38);
++    final labelStyle = AppTextStyle.subheadline
++        .of(context)
++        .copyWith(
++          color: ink,
++          fontFeatures: const [FontFeature.tabularFigures()],
++        );
++    final icon = suspended
++        ? GlyphIcon(AppGlyphs.wifiOff, color: ink, fill: 1)
++        : AnimatedBuilder(
++            animation: _morph,
++            builder: (_, _) =>
++                GlyphIcon(AppGlyphs.playPause(_morph.value), color: ink, fill: 1),
++          );
++    final button = Surface(
++      color: hasProfile
++          ? colorScheme.primary
++          : colorScheme.onSurface.withValues(alpha: 0.12),
++      shape: AppShape.md,
++      elevation: hasProfile ? 6 : 0,
++      shadowColor: colorScheme.shadow,
++      clipBehavior: Clip.antiAlias,
++      child: Tooltip(
++        message: suspended
++            ? appLocalizations.suspended
++            : isStart
++            ? appLocalizations.stop
++            : appLocalizations.start,
++        child: GestureDetector(
++          behavior: HitTestBehavior.opaque,
++          onTap: hasProfile
++              ? ref.read(commonActionProvider.notifier).toggleRunning
++              : null,
++          child: ConstrainedBox(
++            // The height is fixed: the widening time below fills whatever
++            // height it is given, and the corner slot gives it the whole page.
++            constraints: const BoxConstraints(
++              minWidth: _size,
++              minHeight: _size,
++              maxHeight: _size,
++            ),
++            child: Padding(
++              padding: const EdgeInsets.symmetric(horizontal: 16),
++              child: Row(
++                mainAxisSize: MainAxisSize.min,
++                mainAxisAlignment: MainAxisAlignment.center,
++                children: [
++                  icon,
++                  // The time grows out of the icon as the button widens, and
++                  // folds back into it as the button narrows.
++                  AnimatedSwitcher(
++                    duration: _switchDuration,
++                    switchInCurve: Curves.easeOutCubic,
++                    switchOutCurve: Curves.easeInOutCubic,
++                    transitionBuilder: (child, animation) => SizeTransition(
++                      axis: Axis.horizontal,
++                      axisAlignment: -1,
++                      sizeFactor: animation,
++                      child: FadeTransition(opacity: animation, child: child),
++                    ),
++                    child: isStart && _entered
++                        ? Center(
++                            key: const ValueKey('time'),
++                            widthFactor: 1,
++                            child: Padding(
++                              padding: const EdgeInsetsDirectional.only(
++                                start: 8,
++                                end: 4,
++                              ),
++                              child: Text(
++                                getTimeText(runTime),
++                                maxLines: 1,
++                                softWrap: false,
++                                style: labelStyle,
++                              ),
++                            ),
++                          )
++                        : const SizedBox.shrink(key: ValueKey('none')),
++                  ),
++                ],
++              ),
++            ),
++          ),
++        ),
++      ),
++    );
++    return IgnorePointer(
++      ignoring: widget.collapsed,
++      child: AnimatedOpacity(
++        opacity: _visible ? 1 : 0,
++        duration: _widenDuration,
++        curve: Curves.easeOut,
++        child: button,
++      ),
++    );
++  }
++}
