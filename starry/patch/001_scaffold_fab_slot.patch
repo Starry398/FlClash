@@ -1,0 +1,74 @@
+diff --git a/lib/ui/scaffold/scaffold.dart b/lib/ui/scaffold/scaffold.dart
+index d06e41b..a8f7545 100644
+--- a/lib/ui/scaffold/scaffold.dart
++++ b/lib/ui/scaffold/scaffold.dart
+@@ -45,6 +45,13 @@ typedef AppBarSearchStateBuilder =
+     AppBarSearchState? Function(AppBarSearchState? state);
+ 
+ class Scaffold extends StatefulWidget {
++  /// Room the corner slot leaves from the page edge.
++  static const double _floatingActionMargin = 32;
++
++  /// Room the body keeps at its foot for the corner slot: the button itself
++  /// plus the margin below it, so the last row can scroll clear of it.
++  static const double _floatingActionReserve = 88;
++
+   final Widget body;
+   final Color? backgroundColor;
+   final String? title;
+@@ -55,6 +62,10 @@ class Scaffold extends StatefulWidget {
+ 
+   final IconButtonData? primaryAction;
+ 
++  /// The one action the page is for, floated over the bottom end of the
++  /// body and clear of the dock. Pages only; a sheet has no such slot.
++  final Widget? floatingActionButton;
++
+   /// Folded into the overflow menu once the bar would hold more than three
+   /// buttons, as [primaryAction] and [menuItems] are; [actions] never fold.
+   final List<IconButtonData> iconActions;
+@@ -97,6 +108,7 @@ class Scaffold extends StatefulWidget {
+     this.searchInBar = false,
+     this.selectionActions = const [],
+     this.primaryAction,
++    this.floatingActionButton,
+     this.iconActions = const [],
+     this.menuItems = const [],
+     this.confirmationAction,
+@@ -838,7 +850,7 @@ class ScaffoldState extends State<Scaffold>
+     _searchDocked = form.hasDockedSearch;
+     final keywords = widget.keywords;
+     final docked = form.dockedSearch;
+-    return PrismScaffold(
++    final scaffold = PrismScaffold(
+       bar: _buildAppBar(backAction, form),
+       body: SortModeScope(sorting: _sorting, child: widget.body),
+       headerListenable: keywords,
+@@ -859,5 +871,27 @@ class ScaffoldState extends State<Scaffold>
+       backgroundColor: widget.backgroundColor,
+       resizeToAvoidBottomInset: widget.resizeToAvoidBottomInset,
+     );
++    final floatingActionButton = widget.floatingActionButton;
++    if (floatingActionButton == null) {
++      return scaffold;
++    }
++    // The dock and a docked search both overlap the bottom edge, so the corner
++    // slot lifts by the room they already take, and the body reserves the same
++    // room again so the last row can scroll clear of it.
++    final lift = BottomInsetScope.of(context);
++    return Stack(
++      fit: StackFit.expand,
++      children: [
++        BottomInsetScope(
++          inset: lift + Scaffold._floatingActionReserve,
++          child: scaffold,
++        ),
++        PositionedDirectional(
++          end: Scaffold._floatingActionMargin,
++          bottom: lift + Scaffold._floatingActionMargin,
++          child: floatingActionButton,
++        ),
++      ],
++    );
+   }
+ }
