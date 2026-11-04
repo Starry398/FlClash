@@ -1,0 +1,40 @@
+name: Cleanup
+
+# One-off: drops the release and tag so sync can build the same upstream
+# version again. Deleted from the tree once it has run.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  delete:
+    name: Delete release and tag
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Delete release v0.9.3 and its tag
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+
+          if gh release view v0.9.3 --repo "$REPOSITORY" >/dev/null 2>&1; then
+            gh release delete v0.9.3 --repo "$REPOSITORY" --yes --cleanup-tag
+            echo "Release v0.9.3 deleted"
+          else
+            echo "Release v0.9.3 not found"
+          fi
+
+          if git ls-remote --tags "https://github.com/${REPOSITORY}.git" \
+            | grep -q "refs/tags/v0.9.3$"; then
+            git push \
+              "https://x-access-token:${GH_TOKEN}@github.com/${REPOSITORY}.git" \
+              --delete v0.9.3
+            echo "Tag v0.9.3 deleted"
+          else
+            echo "Tag v0.9.3 is gone"
+          fi
