@@ -1,0 +1,210 @@
+diff --git a/lib/ui/scaffold/scaffold.dart b/lib/ui/scaffold/scaffold.dart
+index d06e41b..a911f0b 100644
+--- a/lib/ui/scaffold/scaffold.dart
++++ b/lib/ui/scaffold/scaffold.dart
+@@ -45,6 +45,9 @@ typedef AppBarSearchStateBuilder =
+     AppBarSearchState? Function(AppBarSearchState? state);
+ 
+ class Scaffold extends StatefulWidget {
++  /// Room the corner slot leaves from the page edge.
++  static const double _floatingActionMargin = 16;
++
+   final Widget body;
+   final Color? backgroundColor;
+   final String? title;
+@@ -55,6 +58,10 @@ class Scaffold extends StatefulWidget {
+ 
+   final IconButtonData? primaryAction;
+ 
++  /// The one action the page is for, floated over the bottom end of the
++  /// body and clear of the dock. Pages only; a sheet has no such slot.
++  final Widget? floatingActionButton;
++
+   /// Folded into the overflow menu once the bar would hold more than three
+   /// buttons, as [primaryAction] and [menuItems] are; [actions] never fold.
+   final List<IconButtonData> iconActions;
+@@ -97,6 +104,7 @@ class Scaffold extends StatefulWidget {
+     this.searchInBar = false,
+     this.selectionActions = const [],
+     this.primaryAction,
++    this.floatingActionButton,
+     this.iconActions = const [],
+     this.menuItems = const [],
+     this.confirmationAction,
+@@ -838,7 +846,7 @@ class ScaffoldState extends State<Scaffold>
+     _searchDocked = form.hasDockedSearch;
+     final keywords = widget.keywords;
+     final docked = form.dockedSearch;
+-    return PrismScaffold(
++    final scaffold = PrismScaffold(
+       bar: _buildAppBar(backAction, form),
+       body: SortModeScope(sorting: _sorting, child: widget.body),
+       headerListenable: keywords,
+@@ -859,5 +867,23 @@ class ScaffoldState extends State<Scaffold>
+       backgroundColor: widget.backgroundColor,
+       resizeToAvoidBottomInset: widget.resizeToAvoidBottomInset,
+     );
++    final floatingActionButton = widget.floatingActionButton;
++    if (floatingActionButton == null) {
++      return scaffold;
++    }
++    // The dock and a docked search both overlap the bottom edge, so the
++    // corner slot lifts by the room they already take.
++    return Stack(
++      fit: StackFit.expand,
++      children: [
++        scaffold,
++        PositionedDirectional(
++          end: Scaffold._floatingActionMargin,
++          bottom:
++              BottomInsetScope.of(context) + Scaffold._floatingActionMargin,
++          child: floatingActionButton,
++        ),
++      ],
++    );
+   }
+ }
+diff --git a/lib/views/dashboard/dashboard.dart b/lib/views/dashboard/dashboard.dart
+index 55d2c9b..ef526e1 100644
+--- a/lib/views/dashboard/dashboard.dart
++++ b/lib/views/dashboard/dashboard.dart
+@@ -15,6 +15,7 @@ import 'layout.dart';
+ import 'style.dart';
+ import 'widget_registry.dart';
+ import 'widgets/core_status_button.dart';
++import 'widgets/start_fab.dart';
+ import 'widgets/widgets.dart';
+ 
+ // Narrower columns leave a pair of service cells too tight for a status, so
+@@ -67,6 +68,7 @@ class _DashboardViewState extends ConsumerState<DashboardView> {
+         if (!editable) const UpdateStatusButton(),
+         if (!editing && coreLib == null) const CoreStatusButton(),
+       ],
++      floatingActionButton: editable && !editing ? const StartFab() : null,
+       confirmationAction: editing
+           ? IconButtonData(
+               glyph: AppGlyphs.check,
+diff --git a/lib/views/dashboard/widgets/start_fab.dart b/lib/views/dashboard/widgets/start_fab.dart
+new file mode 100644
+index 0000000..48550ca
+--- /dev/null
++++ b/lib/views/dashboard/widgets/start_fab.dart
+@@ -0,0 +1,51 @@
++import 'package:fl_clash/common/common.dart';
++import 'package:fl_clash/providers/providers.dart';
++import 'package:fl_clash/ui/icons/icons.dart';
++import 'package:flutter/widgets.dart';
++import 'package:flutter_riverpod/flutter_riverpod.dart';
++import 'package:prism_ui/prism_ui.dart';
++
++/// Starts and stops the tunnel from the corner of the page, so the dashboard
++/// does not have to be scrolled back to its bar to reach it. The icon is the
++/// same play-to-pause glyph the tray uses, held at one end or the other.
++class StartFab extends ConsumerWidget {
++  const StartFab({super.key});
++
++  static const double size = 56;
++
++  @override
++  Widget build(BuildContext context, WidgetRef ref) {
++    final appLocalizations = context.appLocalizations;
++    final colorScheme = context.colorScheme;
++    final hasProfile = ref.watch(
++      profilesProvider.select((state) => state.isNotEmpty),
++    );
++    final isStart = ref.watch(isStartProvider);
++    final suspended = isStart && ref.watch(suspendProvider);
++    final glyph = suspended
++        ? AppGlyphs.wifiOff
++        : AppGlyphs.playPause(isStart ? 1 : 0);
++    return SizedBox.square(
++      dimension: size,
++      child: IconButton.filled(
++        onPressed: hasProfile
++            ? ref.read(commonActionProvider.notifier).toggleRunning
++            : null,
++        tooltip: suspended
++            ? appLocalizations.suspended
++            : isStart
++            ? appLocalizations.stop
++            : appLocalizations.start,
++        icon: GlyphIcon(glyph, fill: 1),
++        style: ButtonStyle.from(
++          backgroundColor: hasProfile
++              ? colorScheme.primary
++              : colorScheme.onSurface.withValues(alpha: 0.12),
++          foregroundColor: hasProfile
++              ? colorScheme.onPrimary
++              : colorScheme.onSurface.withValues(alpha: 0.38),
++        ),
++      ),
++    );
++  }
++}
+diff --git a/lib/views/proxies/proxies.dart b/lib/views/proxies/proxies.dart
+index 361107e..cf06bd0 100644
+--- a/lib/views/proxies/proxies.dart
++++ b/lib/views/proxies/proxies.dart
+@@ -7,6 +7,7 @@ import 'package:fl_clash/views/proxies/list.dart';
+ import 'package:fl_clash/widgets/widgets.dart';
+ import 'package:flutter/widgets.dart';
+ import 'package:flutter_riverpod/flutter_riverpod.dart';
++import 'package:prism_ui/prism_ui.dart';
+ 
+ import 'tab.dart';
+ 
+@@ -113,16 +114,42 @@ class _ProxiesViewState extends ConsumerState<ProxiesView> {
+     ];
+   }
+ 
++  void _delayTestCurrentGroup() {
++    _proxiesTabKey.currentState?.delayTestCurrentGroup();
++  }
++
++  /// The delay test of the current group, in the corner of the page.
++  Widget? _buildFloatingAction() {
++    if (!_isTab || widget.picker) {
++      return null;
++    }
++    final isDelayTesting = ref.watch(currentGroupDelayTestingProvider);
++    final colorScheme = context.colorScheme;
++    return SizedBox.square(
++      dimension: 56,
++      child: IconButton.filled(
++        onPressed: isDelayTesting ? null : _delayTestCurrentGroup,
++        tooltip: context.appLocalizations.delayTest,
++        icon: isDelayTesting
++            ? ActivityIndicator(color: colorScheme.onPrimary)
++            : const GlyphIcon(AppGlyphs.bolt, fill: 1),
++        style: ButtonStyle.from(
++          backgroundColor: colorScheme.primary,
++          foregroundColor: colorScheme.onPrimary,
++        ),
++      ),
++    );
++  }
++
+   IconButtonData? _buildPrimaryAction() {
+-    if (!_isTab) {
++    // A page has the corner button; a sheet keeps the bolt in its bar.
++    if (!_isTab || !widget.picker) {
+       return null;
+     }
+     final isDelayTesting = ref.watch(currentGroupDelayTestingProvider);
+     return IconButtonData(
+       glyph: AppGlyphs.bolt,
+-      onPressed: () {
+-        _proxiesTabKey.currentState?.delayTestCurrentGroup();
+-      },
++      onPressed: _delayTestCurrentGroup,
+       tooltip: context.appLocalizations.delayTest,
+       isLoading: isDelayTesting,
+     );
+@@ -160,6 +187,7 @@ class _ProxiesViewState extends ConsumerState<ProxiesView> {
+       isLoading: isLoading,
+       resizeToAvoidBottomInset: false,
+       primaryAction: primaryAction,
++      floatingActionButton: _buildFloatingAction(),
+       searchActions: [?primaryAction],
+       iconActions: [
+         if (_isTab && !picker)
