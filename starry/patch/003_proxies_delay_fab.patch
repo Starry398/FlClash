@@ -1,5 +1,5 @@
 diff --git a/lib/views/proxies/proxies.dart b/lib/views/proxies/proxies.dart
-index 361107e..9c2d4d1 100644
+index 361107e..9e388e3 100644
 --- a/lib/views/proxies/proxies.dart
 +++ b/lib/views/proxies/proxies.dart
 @@ -7,6 +7,7 @@ import 'package:fl_clash/views/proxies/list.dart';
@@ -10,10 +10,12 @@ index 361107e..9c2d4d1 100644
  
  import 'tab.dart';
  
-@@ -113,16 +114,70 @@ class _ProxiesViewState extends ConsumerState<ProxiesView> {
+@@ -113,16 +114,85 @@ class _ProxiesViewState extends ConsumerState<ProxiesView> {
      ];
    }
  
+-  IconButtonData? _buildPrimaryAction() {
+-    if (!_isTab) {
 +  void _delayTestCurrentGroup() {
 +    _proxiesTabKey.currentState?.delayTestCurrentGroup();
 +  }
@@ -22,9 +24,9 @@ index 361107e..9c2d4d1 100644
 +  /// its label: the bolt alone was ambiguous next to the cards behind it.
 +  Widget? _buildFloatingAction() {
 +    if (!_isTab || widget.picker) {
-+      return null;
-+    }
-+    final isDelayTesting = ref.watch(currentGroupDelayTestingProvider);
+       return null;
+     }
+     final isDelayTesting = ref.watch(currentGroupDelayTestingProvider);
 +    final colorScheme = context.colorScheme;
 +    final label = context.appLocalizations.delayTest;
 +    return Surface(
@@ -69,27 +71,58 @@ index 361107e..9c2d4d1 100644
 +    );
 +  }
 +
-   IconButtonData? _buildPrimaryAction() {
--    if (!_isTab) {
++  /// The same action the bar carries, filling the corner the search bar
++  /// leaves empty: the bar keeps its shape while searching.
++  IconButtonData? _buildLocateAction() {
++    if (!_isTab || widget.picker) {
++      return null;
++    }
+     return IconButtonData(
+-      glyph: AppGlyphs.bolt,
++      glyph: AppGlyphs.locate,
+       onPressed: () {
+-        _proxiesTabKey.currentState?.delayTestCurrentGroup();
++        _proxiesTabKey.currentState?.scrollToGroupSelected();
+       },
++      tooltip: context.appLocalizations.scrollToSelected,
++    );
++  }
++
++  IconButtonData? _buildPrimaryAction() {
 +    // A page has the corner button; a sheet keeps the bolt in its bar.
 +    if (!_isTab || !widget.picker) {
-       return null;
-     }
-     final isDelayTesting = ref.watch(currentGroupDelayTestingProvider);
-     return IconButtonData(
-       glyph: AppGlyphs.bolt,
--      onPressed: () {
--        _proxiesTabKey.currentState?.delayTestCurrentGroup();
--      },
++      return null;
++    }
++    final isDelayTesting = ref.watch(currentGroupDelayTestingProvider);
++    return IconButtonData(
++      glyph: AppGlyphs.bolt,
 +      onPressed: _delayTestCurrentGroup,
        tooltip: context.appLocalizations.delayTest,
        isLoading: isDelayTesting,
      );
-@@ -160,6 +215,7 @@ class _ProxiesViewState extends ConsumerState<ProxiesView> {
+@@ -156,21 +226,14 @@ class _ProxiesViewState extends ConsumerState<ProxiesView> {
+     final isLoading = ref.watch(loadingProvider(LoadingTag.proxies));
+     final picker = widget.picker;
+     final primaryAction = _buildPrimaryAction();
++    final locateAction = _buildLocateAction();
+     return Scaffold(
        isLoading: isLoading,
        resizeToAvoidBottomInset: false,
        primaryAction: primaryAction,
+-      searchActions: [?primaryAction],
+-      iconActions: [
+-        if (_isTab && !picker)
+-          IconButtonData(
+-            glyph: AppGlyphs.locate,
+-            onPressed: () {
+-              _proxiesTabKey.currentState?.scrollToGroupSelected();
+-            },
+-            tooltip: context.appLocalizations.scrollToSelected,
+-          ),
+-      ],
 +      floatingActionButton: _buildFloatingAction(),
-       searchActions: [?primaryAction],
-       iconActions: [
-         if (_isTab && !picker)
++      searchActions: [?locateAction],
++      iconActions: [?locateAction],
+       menuItems: picker ? const [] : _buildMenuItems(context, style),
+       title: context.appLocalizations.proxies,
+       searchState: AppBarSearchState(onSearch: _onSearch),
