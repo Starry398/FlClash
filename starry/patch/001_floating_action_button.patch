@@ -1,18 +1,52 @@
+diff --git a/lib/ui/floating_action.dart b/lib/ui/floating_action.dart
+new file mode 100644
+index 0000000..02f4855
+--- /dev/null
++++ b/lib/ui/floating_action.dart
+@@ -0,0 +1,24 @@
++import 'package:flutter/widgets.dart';
++import 'package:prism_ui/prism_ui.dart';
++
++/// Fades a corner button in when its page opens. The motion itself belongs to
++/// the button: a corner control that is already running unrolls its width on
++/// the first frame, and that is the only movement worth showing here.
++class FloatingActionEntrance extends StatelessWidget {
++  const FloatingActionEntrance({super.key, required this.child});
++
++  final Widget child;
++
++  static const _duration = Duration(milliseconds: 160);
++
++  @override
++  Widget build(BuildContext context) {
++    return TweenAnimationBuilder<double>(
++      tween: Tween(begin: 0, end: 1),
++      duration: context.motionDuration(_duration),
++      curve: Curves.easeOut,
++      child: child,
++      builder: (_, t, child) => Opacity(opacity: t, child: child),
++    );
++  }
++}
 diff --git a/lib/ui/scaffold/scaffold.dart b/lib/ui/scaffold/scaffold.dart
-index d06e41b..a911f0b 100644
+index d06e41b..287e418 100644
 --- a/lib/ui/scaffold/scaffold.dart
 +++ b/lib/ui/scaffold/scaffold.dart
-@@ -45,6 +45,9 @@ typedef AppBarSearchStateBuilder =
+@@ -45,6 +45,13 @@ typedef AppBarSearchStateBuilder =
      AppBarSearchState? Function(AppBarSearchState? state);
  
  class Scaffold extends StatefulWidget {
 +  /// Room the corner slot leaves from the page edge.
 +  static const double _floatingActionMargin = 16;
 +
++  /// Room the body keeps at its foot for the corner slot: the button itself
++  /// plus the margin below it, so the last row can scroll clear of it.
++  static const double _floatingActionReserve = 72;
++
    final Widget body;
    final Color? backgroundColor;
    final String? title;
-@@ -55,6 +58,10 @@ class Scaffold extends StatefulWidget {
+@@ -55,6 +62,10 @@ class Scaffold extends StatefulWidget {
  
    final IconButtonData? primaryAction;
  
@@ -23,7 +57,7 @@ index d06e41b..a911f0b 100644
    /// Folded into the overflow menu once the bar would hold more than three
    /// buttons, as [primaryAction] and [menuItems] are; [actions] never fold.
    final List<IconButtonData> iconActions;
-@@ -97,6 +104,7 @@ class Scaffold extends StatefulWidget {
+@@ -97,6 +108,7 @@ class Scaffold extends StatefulWidget {
      this.searchInBar = false,
      this.selectionActions = const [],
      this.primaryAction,
@@ -31,7 +65,7 @@ index d06e41b..a911f0b 100644
      this.iconActions = const [],
      this.menuItems = const [],
      this.confirmationAction,
-@@ -838,7 +846,7 @@ class ScaffoldState extends State<Scaffold>
+@@ -838,7 +850,7 @@ class ScaffoldState extends State<Scaffold>
      _searchDocked = form.hasDockedSearch;
      final keywords = widget.keywords;
      final docked = form.dockedSearch;
@@ -40,7 +74,7 @@ index d06e41b..a911f0b 100644
        bar: _buildAppBar(backAction, form),
        body: SortModeScope(sorting: _sorting, child: widget.body),
        headerListenable: keywords,
-@@ -859,5 +867,23 @@ class ScaffoldState extends State<Scaffold>
+@@ -859,5 +871,27 @@ class ScaffoldState extends State<Scaffold>
        backgroundColor: widget.backgroundColor,
        resizeToAvoidBottomInset: widget.resizeToAvoidBottomInset,
      );
@@ -48,16 +82,20 @@ index d06e41b..a911f0b 100644
 +    if (floatingActionButton == null) {
 +      return scaffold;
 +    }
-+    // The dock and a docked search both overlap the bottom edge, so the
-+    // corner slot lifts by the room they already take.
++    // The dock and a docked search both overlap the bottom edge, so the corner
++    // slot lifts by the room they already take, and the body reserves the same
++    // room again so the last row can scroll clear of it.
++    final lift = BottomInsetScope.of(context);
 +    return Stack(
 +      fit: StackFit.expand,
 +      children: [
-+        scaffold,
++        BottomInsetScope(
++          inset: lift + Scaffold._floatingActionReserve,
++          child: scaffold,
++        ),
 +        PositionedDirectional(
 +          end: Scaffold._floatingActionMargin,
-+          bottom:
-+              BottomInsetScope.of(context) + Scaffold._floatingActionMargin,
++          bottom: lift + Scaffold._floatingActionMargin,
 +          child: floatingActionButton,
 +        ),
 +      ],
@@ -86,63 +124,201 @@ index 55d2c9b..ef526e1 100644
                glyph: AppGlyphs.check,
 diff --git a/lib/views/dashboard/widgets/start_fab.dart b/lib/views/dashboard/widgets/start_fab.dart
 new file mode 100644
-index 0000000..48550ca
+index 0000000..69607cf
 --- /dev/null
 +++ b/lib/views/dashboard/widgets/start_fab.dart
-@@ -0,0 +1,51 @@
+@@ -0,0 +1,189 @@
++import 'dart:async';
++import 'dart:ui' show FontFeature;
++
 +import 'package:fl_clash/common/common.dart';
 +import 'package:fl_clash/providers/providers.dart';
++import 'package:fl_clash/ui/floating_action.dart';
 +import 'package:fl_clash/ui/icons/icons.dart';
 +import 'package:flutter/widgets.dart';
 +import 'package:flutter_riverpod/flutter_riverpod.dart';
 +import 'package:prism_ui/prism_ui.dart';
 +
-+/// Starts and stops the tunnel from the corner of the page, so the dashboard
-+/// does not have to be scrolled back to its bar to reach it. The icon is the
-+/// same play-to-pause glyph the tray uses, held at one end or the other.
-+class StartFab extends ConsumerWidget {
++/// Starts and stops the tunnel from the corner of the page. Stopped, it is a
++/// plain play button; running, it widens to a pause button that carries the
++/// run time. The width, the icon and the time all move together when it starts
++/// or stops, and the page opening replays that same motion once, a little
++/// quicker, so a tunnel that was already up reads as "just started".
++class StartFab extends ConsumerStatefulWidget {
 +  const StartFab({super.key});
 +
-+  static const double size = 56;
++  @override
++  ConsumerState<StartFab> createState() => _StartFabState();
++}
++
++class _StartFabState extends ConsumerState<StartFab>
++    with SingleTickerProviderStateMixin {
++  static const _size = 56.0;
++  static const _entranceDuration = Duration(milliseconds: 280);
++  static const _morphDuration = Duration(milliseconds: 360);
++  static const _widenDuration = Duration(milliseconds: 340);
++  static const _settleTime = Duration(milliseconds: 1200);
++
++  /// 0 is play, 1 is pause. Driven directly instead of through a tween so the
++  /// entrance can replay the exact morph the start action uses.
++  late final AnimationController _morph = AnimationController(
++    vsync: this,
++    duration: _entranceDuration,
++  );
++
++  Timer? _settleTimer;
++  bool _settled = false;
++
++  /// False on the first frame so the width unrolls instead of popping in at
++  /// its final size. The run time is gated on this together with isStart.
++  bool _entered = false;
 +
 +  @override
-+  Widget build(BuildContext context, WidgetRef ref) {
-+    final appLocalizations = context.appLocalizations;
++  void initState() {
++    super.initState();
++    WidgetsBinding.instance.addPostFrameCallback((_) {
++      if (!mounted) return;
++      setState(() => _entered = true);
++      if (ref.read(isStartProvider)) {
++        _morph.forward();
++      }
++    });
++    // settled used to be worked out inside build, so a page that never rebuilt
++    // kept the transitions at zero duration and the first tap jumped.
++    _settleTimer = Timer(_settleTime, () {
++      if (!mounted) return;
++      setState(() => _settled = true);
++    });
++  }
++
++  @override
++  void dispose() {
++    _settleTimer?.cancel();
++    _morph.dispose();
++    super.dispose();
++  }
++
++  Duration get _switchDuration => context.motionDuration(
++    _settled ? _widenDuration : _entranceDuration,
++  );
++
++  @override
++  Widget build(BuildContext context) {
 +    final colorScheme = context.colorScheme;
++    final appLocalizations = context.appLocalizations;
 +    final hasProfile = ref.watch(
 +      profilesProvider.select((state) => state.isNotEmpty),
 +    );
 +    final isStart = ref.watch(isStartProvider);
 +    final suspended = isStart && ref.watch(suspendProvider);
-+    final glyph = suspended
-+        ? AppGlyphs.wifiOff
-+        : AppGlyphs.playPause(isStart ? 1 : 0);
-+    return SizedBox.square(
-+      dimension: size,
-+      child: IconButton.filled(
-+        onPressed: hasProfile
-+            ? ref.read(commonActionProvider.notifier).toggleRunning
-+            : null,
-+        tooltip: suspended
++    final runTime = isStart ? ref.watch(runTimeProvider) : null;
++
++    ref.listen(isStartProvider, (_, next) {
++      if (!_entered) return;
++      _morph.animateTo(
++        next ? 1 : 0,
++        duration: _settled
++            ? context.motionDuration(_morphDuration)
++            : _morph.isAnimating
++            ? _entranceDuration
++            : Duration.zero,
++      );
++    });
++
++    final ink = hasProfile
++        ? colorScheme.onPrimary
++        : colorScheme.onSurface.withValues(alpha: 0.38);
++    final labelStyle = AppTextStyle.subheadline
++        .of(context)
++        .copyWith(
++          color: ink,
++          fontFeatures: const [FontFeature.tabularFigures()],
++        );
++    final icon = suspended
++        ? GlyphIcon(AppGlyphs.wifiOff, color: ink, fill: 1)
++        : AnimatedBuilder(
++            animation: _morph,
++            builder: (_, _) =>
++                GlyphIcon(AppGlyphs.playPause(_morph.value), color: ink, fill: 1),
++          );
++    final button = Surface(
++      color: hasProfile
++          ? colorScheme.primary
++          : colorScheme.onSurface.withValues(alpha: 0.12),
++      shape: AppShape.md,
++      elevation: hasProfile ? 6 : 0,
++      shadowColor: colorScheme.shadow,
++      clipBehavior: Clip.antiAlias,
++      child: Tooltip(
++        message: suspended
 +            ? appLocalizations.suspended
 +            : isStart
 +            ? appLocalizations.stop
 +            : appLocalizations.start,
-+        icon: GlyphIcon(glyph, fill: 1),
-+        style: ButtonStyle.from(
-+          backgroundColor: hasProfile
-+              ? colorScheme.primary
-+              : colorScheme.onSurface.withValues(alpha: 0.12),
-+          foregroundColor: hasProfile
-+              ? colorScheme.onPrimary
-+              : colorScheme.onSurface.withValues(alpha: 0.38),
++        child: GestureDetector(
++          behavior: HitTestBehavior.opaque,
++          onTap: hasProfile
++              ? ref.read(commonActionProvider.notifier).toggleRunning
++              : null,
++          child: ConstrainedBox(
++            // The height is fixed: the widening time below fills whatever
++            // height it is given, and the corner slot gives it the whole page.
++            constraints: const BoxConstraints(
++              minWidth: _size,
++              minHeight: _size,
++              maxHeight: _size,
++            ),
++            child: Padding(
++              padding: const EdgeInsets.symmetric(horizontal: 16),
++              child: Row(
++                mainAxisSize: MainAxisSize.min,
++                mainAxisAlignment: MainAxisAlignment.center,
++                children: [
++                  icon,
++                  // The time grows out of the icon as the button widens, and
++                  // folds back into it as the button narrows. Gated on _entered
++                  // so the first frame starts narrow and unrolls from there.
++                  AnimatedSwitcher(
++                    duration: _switchDuration,
++                    switchInCurve: Curves.easeOutCubic,
++                    switchOutCurve: Curves.easeInOutCubic,
++                    transitionBuilder: (child, animation) => SizeTransition(
++                      axis: Axis.horizontal,
++                      axisAlignment: -1,
++                      sizeFactor: animation,
++                      child: FadeTransition(opacity: animation, child: child),
++                    ),
++                    child: isStart && _entered
++                        ? Center(
++                            key: const ValueKey('time'),
++                            widthFactor: 1,
++                            child: Padding(
++                              padding: const EdgeInsetsDirectional.only(
++                                start: 8,
++                                end: 4,
++                              ),
++                              child: Text(
++                                getTimeText(runTime),
++                                maxLines: 1,
++                                softWrap: false,
++                                style: labelStyle,
++                              ),
++                            ),
++                          )
++                        : const SizedBox.shrink(key: ValueKey('none')),
++                  ),
++                ],
++              ),
++            ),
++          ),
 +        ),
 +      ),
 +    );
++    return FloatingActionEntrance(child: button);
 +  }
 +}
 diff --git a/lib/views/proxies/proxies.dart b/lib/views/proxies/proxies.dart
-index 361107e..ebdfd63 100644
+index 361107e..9c2d4d1 100644
 --- a/lib/views/proxies/proxies.dart
 +++ b/lib/views/proxies/proxies.dart
 @@ -7,6 +7,7 @@ import 'package:fl_clash/views/proxies/list.dart';
@@ -153,7 +329,7 @@ index 361107e..ebdfd63 100644
  
  import 'tab.dart';
  
-@@ -113,16 +114,42 @@ class _ProxiesViewState extends ConsumerState<ProxiesView> {
+@@ -113,16 +114,70 @@ class _ProxiesViewState extends ConsumerState<ProxiesView> {
      ];
    }
  
@@ -161,24 +337,52 @@ index 361107e..ebdfd63 100644
 +    _proxiesTabKey.currentState?.delayTestCurrentGroup();
 +  }
 +
-+  /// The delay test of the current group, in the corner of the page.
++  /// The delay test of the current group, in the corner of the page. It keeps
++  /// its label: the bolt alone was ambiguous next to the cards behind it.
 +  Widget? _buildFloatingAction() {
 +    if (!_isTab || widget.picker) {
 +      return null;
 +    }
 +    final isDelayTesting = ref.watch(currentGroupDelayTestingProvider);
 +    final colorScheme = context.colorScheme;
-+    return SizedBox.square(
-+      dimension: 56,
-+      child: IconButton.filled(
-+        onPressed: isDelayTesting ? null : _delayTestCurrentGroup,
-+        tooltip: context.appLocalizations.delayTest,
-+        icon: isDelayTesting
-+            ? ActivityIndicator(color: colorScheme.onPrimary)
-+            : const GlyphIcon(AppGlyphs.bolt, fill: 1),
-+        style: ButtonStyle.from(
-+          backgroundColor: colorScheme.primary,
-+          foregroundColor: colorScheme.onPrimary,
++    final label = context.appLocalizations.delayTest;
++    return Surface(
++      color: colorScheme.primary,
++      shape: AppShape.md,
++      elevation: 6,
++      shadowColor: colorScheme.shadow,
++      clipBehavior: Clip.antiAlias,
++      child: GestureDetector(
++        behavior: HitTestBehavior.opaque,
++        onTap: isDelayTesting ? null : _delayTestCurrentGroup,
++        child: ConstrainedBox(
++          constraints: const BoxConstraints(minHeight: 56),
++          child: Padding(
++            padding: const EdgeInsets.symmetric(horizontal: 20),
++            child: Row(
++              mainAxisSize: MainAxisSize.min,
++              mainAxisAlignment: MainAxisAlignment.center,
++              children: [
++                isDelayTesting
++                    ? SizedBox.square(
++                        dimension: 20,
++                        child: ActivityIndicator(color: colorScheme.onPrimary),
++                      )
++                    : GlyphIcon(
++                        AppGlyphs.bolt,
++                        color: colorScheme.onPrimary,
++                        fill: 1,
++                      ),
++                const SizedBox(width: 8),
++                Text(
++                  label,
++                  style: AppTextStyle.subheadline
++                      .of(context)
++                      .copyWith(color: colorScheme.onPrimary),
++                ),
++              ],
++            ),
++          ),
 +        ),
 +      ),
 +    );
@@ -200,7 +404,7 @@ index 361107e..ebdfd63 100644
        tooltip: context.appLocalizations.delayTest,
        isLoading: isDelayTesting,
      );
-@@ -160,6 +187,7 @@ class _ProxiesViewState extends ConsumerState<ProxiesView> {
+@@ -160,6 +215,7 @@ class _ProxiesViewState extends ConsumerState<ProxiesView> {
        isLoading: isLoading,
        resizeToAvoidBottomInset: false,
        primaryAction: primaryAction,
