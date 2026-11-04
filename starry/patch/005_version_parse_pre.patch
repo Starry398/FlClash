@@ -1,0 +1,24 @@
+diff --git a/lib/common/package.dart b/lib/common/package.dart
+index 5ae7e94..8193f23 100644
+--- a/lib/common/package.dart
++++ b/lib/common/package.dart
+@@ -12,9 +12,17 @@ extension PackageInfoExtension on PackageInfo {
+   ].join(' ');
+ }
+ 
++/// Strips build metadata (`+2026110401`) and any pre-release suffix
++/// (`-pre.1`, `-beta.2`) so the numeric comparison below never sees them.
++String _versionCore(String version) {
++  final core = version.split('+')[0];
++  final dash = core.indexOf('-');
++  return dash > 0 ? core.substring(0, dash) : core;
++}
++
+ int compareVersions(String version1, String version2) {
+-  final List<String> v1 = version1.split('+')[0].split('.');
+-  final List<String> v2 = version2.split('+')[0].split('.');
++  final List<String> v1 = _versionCore(version1).split('.');
++  final List<String> v2 = _versionCore(version2).split('.');
+   final int major1 = int.parse(v1[0]);
+   final int major2 = int.parse(v2[0]);
+   if (major1 != major2) {
