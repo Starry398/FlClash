@@ -44,7 +44,7 @@ index d06e41b..a8f7545 100644
        bar: _buildAppBar(backAction, form),
        body: SortModeScope(sorting: _sorting, child: widget.body),
        headerListenable: keywords,
-@@ -859,5 +871,27 @@ class ScaffoldState extends State<Scaffold>
+@@ -859,5 +871,27 @@ class ScaffoldState extends State<Scaffold> {
        backgroundColor: widget.backgroundColor,
        resizeToAvoidBottomInset: widget.resizeToAvoidBottomInset,
      );
@@ -65,7 +65,7 @@ index d06e41b..a8f7545 100644
 +        ),
 +        PositionedDirectional(
 +          end: Scaffold._floatingActionMargin,
-+          bottom: lift + 24,
++          bottom: lift + 28,
 +          child: floatingActionButton,
 +        ),
 +      ],
