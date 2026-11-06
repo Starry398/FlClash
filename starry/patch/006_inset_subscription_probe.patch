@@ -1,0 +1,49 @@
+diff --git a/lib/main.dart b/lib/main.dart
+index 9b90013..995fbf0 100644
+--- a/lib/main.dart
++++ b/lib/main.dart
+@@ -3,6 +3,7 @@ import 'dart:io';
+ 
+ import 'package:fl_clash/enum/enum.dart';
+ import 'package:fl_clash/pages/error.dart';
++import 'package:flutter/scheduler.dart';
+ import 'package:flutter/widgets.dart';
+ import 'package:flutter_riverpod/flutter_riverpod.dart';
+ import 'package:rust_api/rust_api.dart';
+@@ -19,6 +20,20 @@ void main(List<String> args) {
+   runZonedGuarded(
+     () async {
+       WidgetsFlutterBinding.ensureInitialized();
++      // PROBE(006): report slow frames so the search-bar hitch can be
++      // measured on a release build. build vs raster separates a rebuild
++      // from a repaint. 32ms = two dropped frames, so nothing normal is
++      // logged.
++      SchedulerBinding.instance.addTimingsCallback((timings) {
++        for (final timing in timings) {
++          final total = timing.totalSpan.inMilliseconds;
++          if (total < 32) continue;
++          print(
++            '[JANK] build=${timing.buildDuration.inMilliseconds} '
++            'raster=${timing.rasterDuration.inMilliseconds} total=$total',
++          );
++        }
++      });
+       if (Platform.isWindows || Platform.isLinux) {
+         SharedPreferencesStorePlatform.instance = AtomicFilePreferencesStore(
+           appPath.sharedPreferencesPath,
+diff --git a/lib/ui/scaffold/scaffold.dart b/lib/ui/scaffold/scaffold.dart
+index 60ff4c6..b868ec8 100644
+--- a/lib/ui/scaffold/scaffold.dart
++++ b/lib/ui/scaffold/scaffold.dart
+@@ -878,7 +878,10 @@ class ScaffoldState extends State<Scaffold>
+     // The dock and a docked search both overlap the bottom edge, so the corner
+     // slot lifts by the room they already take, and the body reserves the same
+     // room again so the last row can scroll clear of it.
+-    final lift = BottomInsetScope.of(context);
++    // PROBE(006): do not subscribe to BottomInsetScope in this build; the
++    // read makes the whole page rebuild whenever the inset moves (keyboard,
++    // dock). Hardcoded 0 for the A/B run.
++    const lift = 0.0;
+     return Stack(
+       fit: StackFit.expand,
+       children: [
