@@ -1,0 +1,13 @@
+diff --git a/lib/ui/scaffold/scaffold_search.dart b/lib/ui/scaffold/scaffold_search.dart
+index 29ae44b..c0168d6 100644
+--- a/lib/ui/scaffold/scaffold_search.dart
++++ b/lib/ui/scaffold/scaffold_search.dart
+@@ -31,7 +31,7 @@ const _searchSettleDuration = Duration(milliseconds: 450);
+ final _searchCurve = SpringCurve(_searchSpring, seconds: 0.45);
+ const double _searchFieldGap = 12;
+ const double _regularSearchWidth = 280;
+-const double _searchBlur = 6;
++const double _searchBlur = 0;
+ 
+ double _shownAt(double t) => ((t - 0.5) / 0.4).clamp(0.0, 1.0);
+ 
